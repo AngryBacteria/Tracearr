@@ -8,7 +8,6 @@ import { formatDistanceToNow } from 'date-fns';
 import {
   useDashboardStats,
   usePlaysStats,
-  useLocationStats,
   useActiveSessions,
   useViolations,
 } from '@/hooks/queries';
@@ -16,7 +15,6 @@ import {
 export function Dashboard() {
   const { data: stats, isLoading: statsLoading } = useDashboardStats();
   const { data: playsData, isLoading: playsLoading } = usePlaysStats('week');
-  const { data: locations } = useLocationStats();
   const { data: sessions } = useActiveSessions();
   const { data: violations, isLoading: violationsLoading } = useViolations({
     pageSize: 5,
@@ -91,7 +89,7 @@ export function Dashboard() {
             <CardTitle>Stream Map</CardTitle>
           </CardHeader>
           <CardContent>
-            <StreamMap sessions={sessions} locations={locations} height={256} />
+            <StreamMap sessions={sessions} height={256} />
           </CardContent>
         </Card>
 
