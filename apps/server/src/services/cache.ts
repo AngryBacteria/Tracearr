@@ -53,6 +53,8 @@ export function createCacheService(redis: Redis): CacheService {
         CACHE_TTL.ACTIVE_SESSIONS,
         JSON.stringify(sessions)
       );
+      // Invalidate dashboard stats so they reflect the new session count
+      await redis.del(REDIS_KEYS.DASHBOARD_STATS);
     },
 
     // Dashboard stats
