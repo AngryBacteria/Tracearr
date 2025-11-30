@@ -8,7 +8,7 @@
  */
 
 import type { FastifyPluginAsync } from 'fastify';
-import { sql, gte, desc, and, isNotNull } from 'drizzle-orm';
+import { sql, gte, desc } from 'drizzle-orm';
 import {
   statsQuerySchema,
   locationStatsQuerySchema,
