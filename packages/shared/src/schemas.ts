@@ -5,7 +5,7 @@
 import { z } from 'zod';
 
 // Common schemas
-export const uuidSchema = z.string().uuid();
+export const uuidSchema = z.uuid();
 export const paginationSchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().positive().max(100).default(20),
@@ -14,7 +14,7 @@ export const paginationSchema = z.object({
 // Auth schemas
 export const loginSchema = z.object({
   serverType: z.enum(['plex', 'jellyfin']),
-  returnUrl: z.string().url().optional(),
+  returnUrl: z.url().optional(),
 });
 
 export const callbackSchema = z.object({
@@ -27,7 +27,7 @@ export const callbackSchema = z.object({
 export const createServerSchema = z.object({
   name: z.string().min(1).max(100),
   type: z.enum(['plex', 'jellyfin']),
-  url: z.string().url(),
+  url: z.url(),
   token: z.string().min(1),
 });
 
@@ -99,14 +99,14 @@ export const createRuleSchema = z.object({
     'concurrent_streams',
     'geo_restriction',
   ]),
-  params: z.record(z.unknown()),
+  params: z.record(z.string(), z.unknown()),
   userId: uuidSchema.nullable().default(null),
   isActive: z.boolean().default(true),
 });
 
 export const updateRuleSchema = z.object({
   name: z.string().min(1).max(100).optional(),
-  params: z.record(z.unknown()).optional(),
+  params: z.record(z.string(), z.unknown()).optional(),
   isActive: z.boolean().optional(),
 });
 
@@ -145,8 +145,8 @@ export const locationStatsQuerySchema = z.object({
 // Settings schemas
 export const updateSettingsSchema = z.object({
   allowGuestAccess: z.boolean().optional(),
-  discordWebhookUrl: z.string().url().nullable().optional(),
-  customWebhookUrl: z.string().url().nullable().optional(),
+  discordWebhookUrl: z.url().nullable().optional(),
+  customWebhookUrl: z.url().nullable().optional(),
   notifyOnViolation: z.boolean().optional(),
   notifyOnSessionStart: z.boolean().optional(),
   notifyOnSessionStop: z.boolean().optional(),
@@ -155,7 +155,7 @@ export const updateSettingsSchema = z.object({
   pollerEnabled: z.boolean().optional(),
   pollerIntervalMs: z.number().int().min(5000).max(300000).optional(),
   // Tautulli integration
-  tautulliUrl: z.string().url().nullable().optional(),
+  tautulliUrl: z.url().nullable().optional(),
   tautulliApiKey: z.string().nullable().optional(),
 });
 

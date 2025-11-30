@@ -10,14 +10,14 @@ import type {
   preHandlerHookHandler,
 } from 'fastify';
 import fp from 'fastify-plugin';
-import { ZodError, type ZodSchema } from 'zod';
+import { type z, ZodError } from 'zod';
 import { ValidationError } from '../utils/errors.js';
 
 // Validation schema options
 export interface ValidationSchemas {
-  body?: ZodSchema;
-  query?: ZodSchema;
-  params?: ZodSchema;
+  body?: z.ZodType;
+  query?: z.ZodType;
+  params?: z.ZodType;
 }
 
 declare module 'fastify' {
@@ -30,9 +30,9 @@ declare module 'fastify' {
  * Parse Zod error into field-level errors
  */
 function parseZodError(error: ZodError): Array<{ field: string; message: string }> {
-  return error.errors.map((err) => ({
-    field: err.path.join('.') || 'unknown',
-    message: err.message,
+  return error.issues.map((issue) => ({
+    field: issue.path.join('.') || 'unknown',
+    message: issue.message,
   }));
 }
 

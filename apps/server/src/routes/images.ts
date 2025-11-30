@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { proxyImage, type FallbackType } from '../services/imageProxy.js';
 
 const proxyQuerySchema = z.object({
-  server: z.string().uuid('Invalid server ID'),
+  server: z.uuid({ error: 'Invalid server ID' }),
   url: z.string().min(1, 'Image URL is required'),
   width: z.coerce.number().int().min(10).max(2000).optional().default(300),
   height: z.coerce.number().int().min(10).max(2000).optional().default(450),
@@ -40,7 +40,7 @@ export const imageRoutes: FastifyPluginAsync = async (app) => {
       if (!parseResult.success) {
         return reply.status(400).send({
           error: 'Invalid query parameters',
-          details: parseResult.error.flatten().fieldErrors,
+          details: z.treeifyError(parseResult.error),
         });
       }
 

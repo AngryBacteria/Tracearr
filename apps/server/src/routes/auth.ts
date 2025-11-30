@@ -33,7 +33,7 @@ const PLEX_TEMP_TOKEN_TTL = 10 * 60; // 10 minutes for server selection
 const signupSchema = z.object({
   username: z.string().min(3).max(50),
   password: z.string().min(8).max(100),
-  email: z.string().email().optional(),
+  email: z.email().optional(),
 });
 
 const localLoginSchema = z.object({
@@ -54,12 +54,12 @@ const plexCheckPinSchema = z.object({
 
 const plexConnectSchema = z.object({
   tempToken: z.string(),
-  serverUri: z.string().url(),
+  serverUri: z.url(),
   serverName: z.string().min(1).max(100),
 });
 
 const jellyfinConnectSchema = z.object({
-  serverUrl: z.string().url(),
+  serverUrl: z.url(),
   serverName: z.string().min(1).max(100),
   username: z.string().min(1),
   password: z.string().min(1),

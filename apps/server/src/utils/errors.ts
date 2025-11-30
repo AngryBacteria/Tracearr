@@ -96,9 +96,9 @@ export class ValidationError extends AppError {
   }
 
   static fromZodError(error: ZodError): ValidationError {
-    const fields = error.errors.map((err) => ({
-      field: err.path.join('.'),
-      message: err.message,
+    const fields = error.issues.map((issue) => ({
+      field: issue.path.join('.'),
+      message: issue.message,
     }));
     return new ValidationError('Validation failed', fields);
   }

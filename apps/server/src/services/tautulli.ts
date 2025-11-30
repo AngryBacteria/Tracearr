@@ -177,7 +177,7 @@ export class TautulliService {
         if (schema) {
           const parsed = schema.safeParse(json);
           if (!parsed.success) {
-            console.error('Tautulli API response validation failed:', parsed.error.flatten());
+            console.error('Tautulli API response validation failed:', z.treeifyError(parsed.error));
             throw new Error(`Invalid Tautulli API response: ${parsed.error.message}`);
           }
           return parsed.data;
