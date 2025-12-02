@@ -27,9 +27,9 @@ export function Login() {
   const { toast } = useToast();
   const { isAuthenticated, isLoading: authLoading, refetch } = useAuth();
 
-  // Setup status - default to true while loading to avoid flash to wrong UI
+  // Setup status - default to false (Sign In mode) since most users are returning
   const [setupLoading, setSetupLoading] = useState(true);
-  const [needsSetup, setNeedsSetup] = useState(true);
+  const [needsSetup, setNeedsSetup] = useState(false);
   const [hasPasswordAuth, setHasPasswordAuth] = useState(false);
 
   // Auth flow state
@@ -46,19 +46,32 @@ export function Login() {
   const [password, setPassword] = useState('');
   const [email, setEmail] = useState('');
 
-  // Check setup status on mount
+  // Check setup status on mount with retry logic for server restarts
   useEffect(() => {
     async function checkSetup() {
-      try {
-        const status = await api.setup.status();
-        setNeedsSetup(status.needsSetup);
-        setHasPasswordAuth(status.hasPasswordAuth);
-      } catch {
-        // If we can't reach the server, assume setup needed
-        setNeedsSetup(true);
-      } finally {
-        setSetupLoading(false);
+      const maxRetries = 3;
+      const delays = [0, 1000, 2000]; // immediate, 1s, 2s
+
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          if (attempt > 0) {
+            await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+          }
+          const status = await api.setup.status();
+          setNeedsSetup(status.needsSetup);
+          setHasPasswordAuth(status.hasPasswordAuth);
+          setSetupLoading(false);
+          return; // Success - exit retry loop
+        } catch {
+          // Continue to next retry attempt
+        }
       }
+
+      // All retries failed - server is unavailable
+      // Default to Sign In mode (needsSetup: false) since most users are returning users
+      // If they actually need setup, the server will tell them when it comes back
+      setNeedsSetup(false);
+      setSetupLoading(false);
     }
     void checkSetup();
   }, []);
