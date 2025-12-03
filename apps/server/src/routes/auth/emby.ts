@@ -12,6 +12,7 @@ import { servers } from '../../db/schema.js';
 import { EmbyClient } from '../../services/mediaServer/index.js';
 import { encrypt } from '../../utils/crypto.js';
 import { generateTokens } from './utils.js';
+import { syncServer } from '../../services/sync.js';
 
 // Schema for API key connection
 const embyConnectApiKeySchema = z.object({
@@ -83,6 +84,15 @@ export const embyRoutes: FastifyPluginAsync = async (app) => {
         const serverId = server[0]!.id;
 
         app.log.info({ userId: authUser.userId, serverId }, 'Emby server connected via API key');
+
+        // Auto-sync server users and libraries in background
+        syncServer(serverId, { syncUsers: true, syncLibraries: true })
+          .then((result) => {
+            app.log.info({ serverId, usersAdded: result.usersAdded, librariesSynced: result.librariesSynced }, 'Auto-sync completed for Emby server');
+          })
+          .catch((error) => {
+            app.log.error({ error, serverId }, 'Auto-sync failed for Emby server');
+          });
 
         // Return updated tokens with new server access
         return generateTokens(app, authUser.userId, authUser.username, authUser.role);

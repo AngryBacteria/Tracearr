@@ -6,6 +6,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { tautulliImportSchema } from '@tracearr/shared';
 import { TautulliService } from '../services/tautulli.js';
 import { getPubSubService } from '../services/cache.js';
+import { syncServer } from '../services/sync.js';
 
 export const importRoutes: FastifyPluginAsync = async (app) => {
   /**
@@ -28,6 +29,16 @@ export const importRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const { serverId } = body.data;
+
+      // Sync server users first to ensure we have all users before importing history
+      try {
+        app.log.info({ serverId }, 'Syncing server before Tautulli import');
+        await syncServer(serverId, { syncUsers: true, syncLibraries: false });
+        app.log.info({ serverId }, 'Server sync completed, starting import');
+      } catch (error) {
+        app.log.error({ error, serverId }, 'Failed to sync server before import');
+        return reply.internalServerError('Failed to sync server users before import');
+      }
 
       // Get pubsub service for progress updates
       const pubSubService = getPubSubService();

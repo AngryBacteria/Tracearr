@@ -125,6 +125,15 @@ export const serverRoutes: FastifyPluginAsync = async (app) => {
         return reply.internalServerError('Failed to create server');
       }
 
+      // Auto-sync users and libraries in background
+      syncServer(server.id, { syncUsers: true, syncLibraries: true })
+        .then((result) => {
+          app.log.info({ serverId: server.id, usersAdded: result.usersAdded, librariesSynced: result.librariesSynced }, 'Auto-sync completed for new server');
+        })
+        .catch((error) => {
+          app.log.error({ error, serverId: server.id }, 'Auto-sync failed for new server');
+        });
+
       return reply.status(201).send(server);
     }
   );

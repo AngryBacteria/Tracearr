@@ -18,6 +18,7 @@ import {
   PLEX_TEMP_TOKEN_PREFIX,
   PLEX_TEMP_TOKEN_TTL,
 } from './utils.js';
+import { syncServer } from '../../services/sync.js';
 import { getUserByPlexAccountId, getOwnerUser, getUserById } from '../../services/userService.js';
 
 // Schemas
@@ -268,6 +269,15 @@ export const plexRoutes: FastifyPluginAsync = async (app) => {
       });
 
       app.log.info({ userId: newUser.id, serverId, role }, 'New Plex user with server created');
+
+      // Auto-sync server users and libraries in background
+      syncServer(serverId, { syncUsers: true, syncLibraries: true })
+        .then((result) => {
+          app.log.info({ serverId, usersAdded: result.usersAdded, librariesSynced: result.librariesSynced }, 'Auto-sync completed for Plex server');
+        })
+        .catch((error) => {
+          app.log.error({ error, serverId }, 'Auto-sync failed for Plex server');
+        });
 
       return generateTokens(app, newUser.id, newUser.username, newUser.role);
     } catch (error) {
