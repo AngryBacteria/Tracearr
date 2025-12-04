@@ -129,7 +129,9 @@ Frontend runs at `localhost:5173`, API at `localhost:3000`.
 
 **TimescaleDB** handles session history. Regular Postgres works fine until you have a year of watch data and your stats queries start taking forever. TimescaleDB is built for exactly this kind of time-series data—dashboard stats stay fast because they're pre-computed, not recalculated every page load.
 
-**Fastify** over Express because it's measurably faster and the schema validation is nice. When you're polling servers every 15 seconds, the little things add up.
+**Fastify** over Express because it's measurably faster and the schema validation is nice.
+
+**Plex SSE** — Plex servers stream session updates in real-time via Server-Sent Events. No polling delay, instant detection. Jellyfin and Emby still use polling (they don't support SSE), but Plex sessions appear the moment they start.
 
 ## Project Structure
 
@@ -137,7 +139,8 @@ Frontend runs at `localhost:5173`, API at `localhost:3000`.
 tracearr/
 ├── apps/
 │   ├── web/          # React frontend
-│   └── server/       # Fastify backend
+│   ├── server/       # Fastify backend
+│   └── mobile/       # React Native app (coming soon)
 ├── packages/
 │   └── shared/       # Types, schemas, constants
 ├── docker/           # Compose files
@@ -192,12 +195,14 @@ Check the [issues](https://github.com/connorgallopo/Tracearr/issues) for things 
 - [x] Session tracking with full history
 - [x] 5 sharing detection rules
 - [x] Real-time WebSocket updates
+- [x] Plex SSE for instant session detection
 - [x] Discord + webhook notifications
 - [x] Interactive stream map
 - [x] Trust scores
 - [x] Tautulli history import
 
-**v1.0** (next milestone)
+**v1.5** (next milestone)
+- [ ] Mobile app (iOS & Android) — *in development*
 - [ ] Stream termination (kill suspicious streams)
 - [ ] Account suspension automation
 - [ ] Email notifications
@@ -207,7 +212,6 @@ Check the [issues](https://github.com/connorgallopo/Tracearr/issues) for things 
 - [ ] Tiered access controls
 - [ ] Arr integration (Radarr/Sonarr)
 - [ ] Multi-admin support
-- [ ] Mobile app
 
 ## License
 
