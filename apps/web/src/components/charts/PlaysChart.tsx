@@ -43,10 +43,10 @@ export function PlaysChart({ data, isLoading, height = 200, period = 'month' }: 
           },
           formatter: function () {
             // this.value could be index (number) or category string depending on Highcharts version
-            const categories = this.axis.categories as string[];
+            const categories = this.axis.categories;
             const categoryValue = typeof this.value === 'number'
               ? categories[this.value]
-              : this.value as string;
+              : this.value;
             if (!categoryValue) return '';
             const date = new Date(categoryValue);
             if (isNaN(date.getTime())) return '';
