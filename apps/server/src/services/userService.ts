@@ -499,35 +499,53 @@ export async function syncUserFromMediaServer(
     return { serverUser: updated, user, created: false };
   }
 
-  // New server user - find or create user identity
-  let user: User | null = null;
+  // Use transaction to prevent orphaned users if server user creation fails
+  // This ensures atomicity: either both user + server_user are created, or neither
+  const result = await db.transaction(async (tx) => {
+    let user: User | undefined;
 
-  // Try to find existing user by email match
-  if (mediaUser.email) {
-    user = await getUserByEmail(mediaUser.email);
-  }
+    // Try to find existing user by email match
+    if (mediaUser.email) {
+      const [existingUser] = await tx
+        .select()
+        .from(users)
+        .where(eq(users.email, mediaUser.email))
+        .limit(1);
+      user = existingUser;
+    }
 
-  // No match - create new user identity
-  if (!user) {
-    user = await createUser({
-      username: mediaUser.username, // Use media server username as identity username
-      email: mediaUser.email,
-      thumbnail: mediaUser.thumb,
-    });
-  }
+    // No match - create new user identity
+    if (!user) {
+      const [newUser] = await tx
+        .insert(users)
+        .values({
+          username: mediaUser.username, // Use media server username as identity username
+          name: null,
+          email: mediaUser.email ?? null,
+          thumbnail: mediaUser.thumb ?? null,
+        })
+        .returning();
+      user = newUser!; // Insert always returns a row
+    }
 
-  // Create server user linked to user identity
-  const serverUser = await createServerUser({
-    userId: user.id,
-    serverId,
-    externalId: mediaUser.id,
-    username: mediaUser.username,
-    email: mediaUser.email,
-    thumbUrl: mediaUser.thumb,
-    isServerAdmin: mediaUser.isAdmin,
+    // Create server user linked to user identity
+    const [serverUser] = await tx
+      .insert(serverUsers)
+      .values({
+        userId: user.id,
+        serverId,
+        externalId: mediaUser.id,
+        username: mediaUser.username,
+        email: mediaUser.email ?? null,
+        thumbUrl: mediaUser.thumb ?? null,
+        isServerAdmin: mediaUser.isAdmin,
+      })
+      .returning();
+
+    return { serverUser: serverUser!, user };
   });
 
-  return { serverUser, user, created: true };
+  return { serverUser: result.serverUser, user: result.user, created: true };
 }
 
 /**
@@ -588,13 +606,15 @@ export async function getUserWithStats(userId: string): Promise<UserWithStats | 
   let totalWatchTime = 0;
 
   if (serverUserIds.length > 0) {
+    // Build explicit PostgreSQL array literal (Drizzle doesn't auto-convert JS arrays for ANY())
+    const serverUserIdArray = sql.raw(`ARRAY[${serverUserIds.map(id => `'${id}'::uuid`).join(',')}]`);
     const statsResult = await db
       .select({
         totalSessions: sql<number>`count(*)::int`,
         totalWatchTime: sql<number>`coalesce(sum(duration_ms), 0)::bigint`,
       })
       .from(sessions)
-      .where(sql`${sessions.serverUserId} = ANY(${serverUserIds})`);
+      .where(sql`${sessions.serverUserId} = ANY(${serverUserIdArray})`);
 
     const stats = statsResult[0];
     totalSessions = stats?.totalSessions ?? 0;
