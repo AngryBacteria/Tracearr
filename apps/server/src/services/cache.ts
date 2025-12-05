@@ -217,3 +217,115 @@ export function createPubSubService(
 
   return service;
 }
+
+// ============================================================================
+// Atomic Cache Helpers
+// ============================================================================
+
+/**
+ * Execute DB operation with cache invalidation.
+ * Pattern: Invalidate → Execute → Invalidate again
+ * Prevents stale reads during and after operation.
+ *
+ * @param redis - Redis client
+ * @param keysToInvalidate - Cache keys to invalidate
+ * @param operation - Async operation to execute
+ * @returns Result of the operation
+ *
+ * @example
+ * await withCacheInvalidation(redis, [REDIS_KEYS.ACTIVE_SESSIONS], async () => {
+ *   return await db.insert(sessions).values(data);
+ * });
+ */
+export async function withCacheInvalidation<T>(
+  redis: Redis,
+  keysToInvalidate: string[],
+  operation: () => Promise<T>
+): Promise<T> {
+  // Invalidate before (prevents stale reads during operation)
+  if (keysToInvalidate.length > 0) {
+    await redis.del(...keysToInvalidate);
+  }
+
+  // Execute the operation
+  const result = await operation();
+
+  // Invalidate after (catches concurrent writes)
+  if (keysToInvalidate.length > 0) {
+    await redis.del(...keysToInvalidate);
+  }
+
+  return result;
+}
+
+/**
+ * Atomic cache update with distributed lock.
+ * Prevents race conditions when multiple processes update same key.
+ *
+ * @param redis - Redis client
+ * @param key - Cache key to update
+ * @param ttl - TTL in seconds
+ * @param getData - Async function to get fresh data
+ * @returns Cached or fresh data
+ *
+ * @example
+ * const stats = await atomicCacheUpdate(redis, 'dashboard:stats', 60, async () => {
+ *   return await computeDashboardStats();
+ * });
+ */
+export async function atomicCacheUpdate<T>(
+  redis: Redis,
+  key: string,
+  ttl: number,
+  getData: () => Promise<T>
+): Promise<T> {
+  const lockKey = `${key}:lock`;
+
+  // Try to acquire lock (5 second expiry)
+  const lockAcquired = await redis.set(lockKey, '1', 'EX', 5, 'NX');
+
+  if (!lockAcquired) {
+    // Another process is updating, wait and read cached value
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const cached = await redis.get(key);
+    if (cached) {
+      return JSON.parse(cached) as T;
+    }
+    // Cache miss, try again (recursive call)
+    return atomicCacheUpdate(redis, key, ttl, getData);
+  }
+
+  try {
+    const data = await getData();
+    await redis.setex(key, ttl, JSON.stringify(data));
+    return data;
+  } finally {
+    await redis.del(lockKey);
+  }
+}
+
+/**
+ * Atomic multi-key update using Redis MULTI/EXEC.
+ * All updates succeed or fail together.
+ *
+ * @param redis - Redis client
+ * @param updates - Array of key/value/ttl updates
+ *
+ * @example
+ * await atomicMultiUpdate(redis, [
+ *   { key: REDIS_KEYS.ACTIVE_SESSIONS, value: sessions, ttl: 300 },
+ *   { key: REDIS_KEYS.DASHBOARD_STATS, value: stats, ttl: 60 },
+ * ]);
+ */
+export async function atomicMultiUpdate(
+  redis: Redis,
+  updates: Array<{ key: string; value: unknown; ttl: number }>
+): Promise<void> {
+  const pipeline = redis.multi();
+
+  for (const { key, value, ttl } of updates) {
+    pipeline.setex(key, ttl, JSON.stringify(value));
+  }
+
+  await pipeline.exec();
+}
