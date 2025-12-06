@@ -188,6 +188,19 @@ export const TIME_MS = {
   WEEK: 7 * 24 * 60 * 60 * 1000,
 } as const;
 
+// Server resource statistics configuration (CPU, RAM)
+// Used with Plex's undocumented /statistics/resources endpoint
+export const SERVER_STATS_CONFIG = {
+  // Poll interval in seconds (how often we fetch new data)
+  POLL_INTERVAL_SECONDS: 6,
+  // Timespan parameter for Plex API (MUST be 6 - other values return empty!)
+  TIMESPAN_SECONDS: 6,
+  // Fixed 2-minute window (20 data points at 6s intervals)
+  WINDOW_SECONDS: 120,
+  // Data points to display (2 min / 6s = 20 points)
+  DATA_POINTS: 20,
+} as const;
+
 // Session limits
 export const SESSION_LIMITS = {
   MAX_RECENT_PER_USER: 100,

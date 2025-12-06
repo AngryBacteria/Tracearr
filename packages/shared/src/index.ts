@@ -49,6 +49,9 @@ export type {
   TopUserStats,
   TopContentStats,
   PlatformStats,
+  // Server resource stats
+  ServerResourceDataPoint,
+  ServerResourceStats,
   // Settings
   Settings,
   // Tautulli import
@@ -160,6 +163,7 @@ export {
   GEOIP_CONFIG,
   TIME_MS,
   SESSION_LIMITS,
+  SERVER_STATS_CONFIG,
   // SSE
   SSE_CONFIG,
   PLEX_SSE_EVENTS,

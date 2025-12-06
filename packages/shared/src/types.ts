@@ -238,6 +238,7 @@ export interface DashboardStats {
   todayPlays: number;
   watchTimeHours: number;
   alertsLast24h: number;
+  activeUsersToday: number;
 }
 
 export interface PlayStats {
@@ -344,6 +345,32 @@ export interface TopContentStats {
 export interface PlatformStats {
   platform: string | null;
   count: number;
+}
+
+// Server resource statistics (CPU, RAM)
+// From Plex's undocumented /statistics/resources endpoint
+export interface ServerResourceDataPoint {
+  /** Unix timestamp */
+  at: number;
+  /** Timespan interval in seconds */
+  timespan: number;
+  /** System-wide CPU utilization percentage */
+  hostCpuUtilization: number;
+  /** Plex process CPU utilization percentage */
+  processCpuUtilization: number;
+  /** System-wide memory utilization percentage */
+  hostMemoryUtilization: number;
+  /** Plex process memory utilization percentage */
+  processMemoryUtilization: number;
+}
+
+export interface ServerResourceStats {
+  /** Server ID these stats belong to */
+  serverId: string;
+  /** Data points (newest first based on 'at' timestamp) */
+  data: ServerResourceDataPoint[];
+  /** When this data was fetched */
+  fetchedAt: Date;
 }
 
 // Settings types
