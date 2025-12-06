@@ -504,6 +504,7 @@ export class TautulliService {
             // Tautulli provides thumb which is season poster for episodes, show/movie poster for others
             thumbPath: record.thumb || null,
             startedAt,
+            lastSeenAt: startedAt, // For historical data, use startedAt as lastSeenAt
             stoppedAt: new Date(record.stopped * 1000),
             durationMs: record.duration * 1000,
             totalDurationMs: null, // Tautulli doesn't provide total duration directly

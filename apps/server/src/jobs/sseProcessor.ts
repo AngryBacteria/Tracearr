@@ -356,6 +356,7 @@ async function createNewSession(
       year: processed.year || null,
       thumbPath: processed.thumbPath || null,
       startedAt: new Date(),
+      lastSeenAt: new Date(), // Track when we first saw this session
       totalDurationMs: processed.totalDurationMs || null,
       progressMs: processed.progressMs || null,
       lastPausedAt: processed.state === 'paused' ? new Date() : null,
