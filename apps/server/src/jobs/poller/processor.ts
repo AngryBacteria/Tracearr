@@ -823,7 +823,21 @@ async function pollServers(): Promise<void> {
 
     // Update cache with current active sessions using atomic batch update
     if (cacheService && redisClient) {
-      const currentActiveSessions = [...allNewSessions, ...allUpdatedSessions];
+      // Get IDs of servers that were polled this cycle
+      const polledServerIds = new Set(serversNeedingPoll.map((s) => s.id));
+
+      // Preserve sessions from SSE-connected servers (servers that weren't polled)
+      // This prevents overwriting SSE server sessions when we update the cache
+      const sseServerSessions = (cachedSessions ?? []).filter(
+        (s) => !polledServerIds.has(s.serverId)
+      );
+
+      // Combine: preserved SSE server sessions + new/updated from polled servers
+      const currentActiveSessions = [
+        ...sseServerSessions, // Keep SSE server sessions unchanged
+        ...allNewSessions, // New sessions from polled servers
+        ...allUpdatedSessions, // Updated sessions from polled servers
+      ];
 
       // Build atomic cache updates for all sessions
       const cacheUpdates: Array<{ key: string; value: unknown; ttl: number }> = [

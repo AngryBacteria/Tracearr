@@ -438,9 +438,24 @@ async function createNewSession(
     await cacheService.setSessionById(inserted.id, activeSession);
     await cacheService.addUserSession(serverUserId, inserted.id);
 
-    // Update active sessions list
+    // Update active sessions list with deduplication
+    // Use composite key (serverId:sessionKey) to ensure uniqueness
     const allActive = await cacheService.getActiveSessions();
-    await cacheService.setActiveSessions([...(allActive ?? []), activeSession]);
+    const existingKeys = new Set(
+      (allActive ?? []).map((s) => `${s.serverId}:${s.sessionKey}`)
+    );
+    const newKey = `${activeSession.serverId}:${activeSession.sessionKey}`;
+
+    // Only add if not already present (prevents duplicates)
+    if (!existingKeys.has(newKey)) {
+      await cacheService.setActiveSessions([...(allActive ?? []), activeSession]);
+    } else {
+      // Session already exists - update it instead of adding duplicate
+      const updated = (allActive ?? []).map((s) =>
+        `${s.serverId}:${s.sessionKey}` === newKey ? activeSession : s
+      );
+      await cacheService.setActiveSessions(updated);
+    }
   }
 
   // Broadcast new session
