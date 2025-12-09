@@ -92,6 +92,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build dependencies (shared, test-utils)
+        run: pnpm turbo run build --filter=@tracearr/shared --filter=@tracearr/test-utils
+
       - name: Run ${{ matrix.group }} tests
         run: pnpm --filter @tracearr/server test:${{ matrix.group }}
 
