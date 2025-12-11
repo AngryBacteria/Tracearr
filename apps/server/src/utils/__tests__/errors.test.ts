@@ -39,6 +39,7 @@ import {
   ServiceUnavailableError,
   ExternalServiceError,
   ErrorCodes,
+  registerErrorHandler,
 } from '../errors.js';
 
 describe('ErrorCodes', () => {
@@ -432,6 +433,183 @@ describe('ExternalServiceError', () => {
     expect(jellyfinError.message).toMatch(/^Jellyfin error:/);
     expect(embyError.message).toMatch(/^Emby error:/);
     expect(geoipError.message).toMatch(/^Geoip error:/);
+  });
+});
+
+describe('registerErrorHandler', () => {
+  it('should handle AppError correctly', async () => {
+    const { default: Fastify } = await import('fastify');
+    const app = Fastify({ logger: false });
+
+    registerErrorHandler(app);
+
+    app.get('/test', () => {
+      throw new ValidationError('Test validation error', [
+        { field: 'name', message: 'Required' },
+      ]);
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/test' });
+
+    expect(response.statusCode).toBe(400);
+    const body = response.json();
+    expect(body.code).toBe(ErrorCodes.VALIDATION_ERROR);
+    expect(body.message).toBe('Test validation error');
+
+    await app.close();
+  });
+
+  it('should handle Fastify sensible errors', async () => {
+    const { default: Fastify } = await import('fastify');
+    const { default: sensible } = await import('@fastify/sensible');
+    const app = Fastify({ logger: false });
+
+    await app.register(sensible);
+    registerErrorHandler(app);
+
+    app.get('/test', (_req, reply) => {
+      return reply.unauthorized('Custom unauthorized message');
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/test' });
+
+    expect(response.statusCode).toBe(401);
+    const body = response.json();
+    expect(body.message).toBe('Custom unauthorized message');
+
+    await app.close();
+  });
+
+  it('should handle generic errors with statusCode', async () => {
+    const { default: Fastify } = await import('fastify');
+    const app = Fastify({ logger: false });
+
+    registerErrorHandler(app);
+
+    app.get('/test', () => {
+      const err = new Error('Custom error') as Error & { statusCode: number };
+      err.statusCode = 418;
+      throw err;
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/test' });
+
+    expect(response.statusCode).toBe(418);
+    const body = response.json();
+    expect(body.message).toBe('Custom error');
+
+    await app.close();
+  });
+
+  it('should handle unknown errors as 500', async () => {
+    const { default: Fastify } = await import('fastify');
+    const app = Fastify({ logger: false });
+
+    registerErrorHandler(app);
+
+    app.get('/test', () => {
+      throw new Error('Unknown error');
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/test' });
+
+    expect(response.statusCode).toBe(500);
+    const body = response.json();
+    expect(body.error).toBe('InternalServerError');
+    // In non-production, shows actual message
+    expect(body.message).toBe('Unknown error');
+
+    await app.close();
+  });
+
+  it('should handle 404 not found', async () => {
+    const { default: Fastify } = await import('fastify');
+    const app = Fastify({ logger: false });
+
+    registerErrorHandler(app);
+
+    const response = await app.inject({ method: 'GET', url: '/nonexistent' });
+
+    expect(response.statusCode).toBe(404);
+    const body = response.json();
+    expect(body.error).toBe('NotFound');
+    expect(body.message).toContain('not found');
+
+    await app.close();
+  });
+
+  it('should handle Fastify validation errors', async () => {
+    const { default: Fastify } = await import('fastify');
+    const app = Fastify({ logger: false });
+
+    registerErrorHandler(app);
+
+    // Define a route with JSON schema validation
+    app.post(
+      '/test',
+      {
+        schema: {
+          body: {
+            type: 'object',
+            required: ['name', 'email'],
+            properties: {
+              name: { type: 'string' },
+              email: { type: 'string', format: 'email' },
+            },
+          },
+        },
+      },
+      () => {
+        return { ok: true };
+      }
+    );
+
+    // Send invalid body (missing required fields)
+    const response = await app.inject({
+      method: 'POST',
+      url: '/test',
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(400);
+    const body = response.json();
+    expect(body.message).toBe('Validation failed');
+
+    await app.close();
+  });
+
+  it('should handle validation errors with missing message', async () => {
+    const { default: Fastify } = await import('fastify');
+    const app = Fastify({ logger: false });
+
+    registerErrorHandler(app);
+
+    // Manually simulate a validation error with missing message
+    app.get('/test', () => {
+      const err = new Error('Validation error') as Error & {
+        validation: Array<{ instancePath: string; message?: string }>;
+      };
+      err.validation = [
+        { instancePath: '/field1', message: undefined },
+        { instancePath: '', message: 'Field is required' },
+      ];
+      throw err;
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/test' });
+
+    expect(response.statusCode).toBe(400);
+    const body = response.json();
+    expect(body.details?.fields).toContainEqual({
+      field: '/field1',
+      message: 'Invalid value',
+    });
+    expect(body.details?.fields).toContainEqual({
+      field: 'unknown',
+      message: 'Field is required',
+    });
+
+    await app.close();
   });
 });
 
