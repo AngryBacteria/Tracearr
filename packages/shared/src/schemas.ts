@@ -197,11 +197,16 @@ export const locationStatsQuerySchema = z
     { message: 'startDate must be before endDate' }
   );
 
+// Webhook format enum
+export const webhookFormatSchema = z.enum(['json', 'ntfy', 'apprise']);
+
 // Settings schemas
 export const updateSettingsSchema = z.object({
   allowGuestAccess: z.boolean().optional(),
   discordWebhookUrl: z.url().nullable().optional(),
   customWebhookUrl: z.url().nullable().optional(),
+  webhookFormat: webhookFormatSchema.nullable().optional(),
+  ntfyTopic: z.string().max(200).nullable().optional(),
   notifyOnViolation: z.boolean().optional(),
   notifyOnSessionStart: z.boolean().optional(),
   notifyOnSessionStop: z.boolean().optional(),

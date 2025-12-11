@@ -56,6 +56,7 @@ export type {
   ServerResourceStats,
   // Settings
   Settings,
+  WebhookFormat,
   // Tautulli import
   TautulliImportProgress,
   TautulliImportResult,

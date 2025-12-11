@@ -413,11 +413,16 @@ export interface ServerResourceStats {
   fetchedAt: Date;
 }
 
+// Webhook format types
+export type WebhookFormat = 'json' | 'ntfy' | 'apprise';
+
 // Settings types
 export interface Settings {
   allowGuestAccess: boolean;
   discordWebhookUrl: string | null;
   customWebhookUrl: string | null;
+  webhookFormat: WebhookFormat | null;
+  ntfyTopic: string | null;
   notifyOnViolation: boolean;
   notifyOnSessionStart: boolean;
   notifyOnSessionStop: boolean;
