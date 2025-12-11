@@ -2,13 +2,47 @@
  * Notification dispatch service
  */
 
-import type { ViolationWithDetails, ActiveSession, Settings } from '@tracearr/shared';
+import type { ViolationWithDetails, ActiveSession, Settings, WebhookFormat } from '@tracearr/shared';
 import { NOTIFICATION_EVENTS, RULE_DISPLAY_NAMES, SEVERITY_LEVELS } from '@tracearr/shared';
 
 export interface NotificationPayload {
   event: string;
   timestamp: string;
   data: Record<string, unknown>;
+}
+
+interface NtfyPayload {
+  topic: string;
+  title: string;
+  message: string;
+  priority: number;
+  tags: string[];
+}
+
+interface ApprisePayload {
+  title: string;
+  body: string;
+  type: 'info' | 'success' | 'warning' | 'failure';
+}
+
+/**
+ * Map severity to ntfy priority (1-5 scale)
+ */
+function severityToNtfyPriority(severity: string): number {
+  const map: Record<string, number> = { high: 5, warning: 4, low: 3 };
+  return map[severity] ?? 3;
+}
+
+/**
+ * Map severity to Apprise notification type
+ */
+function severityToAppriseType(severity: string): 'info' | 'success' | 'warning' | 'failure' {
+  const map: Record<string, 'info' | 'success' | 'warning' | 'failure'> = {
+    high: 'failure',
+    warning: 'warning',
+    low: 'info',
+  };
+  return map[severity] ?? 'info';
 }
 
 export class NotificationService {
@@ -23,8 +57,6 @@ export class NotificationService {
       return;
     }
 
-    const payload = this.buildViolationPayload(violation);
-
     const promises: Promise<void>[] = [];
 
     if (settings.discordWebhookUrl) {
@@ -32,7 +64,10 @@ export class NotificationService {
     }
 
     if (settings.customWebhookUrl) {
-      promises.push(this.sendWebhook(settings.customWebhookUrl, payload));
+      const payload = this.buildViolationPayload(violation);
+      promises.push(
+        this.sendFormattedWebhook(settings, payload, { violation })
+      );
     }
 
     await Promise.allSettled(promises);
@@ -57,7 +92,7 @@ export class NotificationService {
     };
 
     if (settings.customWebhookUrl) {
-      await this.sendWebhook(settings.customWebhookUrl, payload);
+      await this.sendFormattedWebhook(settings, payload, { session, eventType: 'session_started' });
     }
   }
 
@@ -80,7 +115,7 @@ export class NotificationService {
     };
 
     if (settings.customWebhookUrl) {
-      await this.sendWebhook(settings.customWebhookUrl, payload);
+      await this.sendFormattedWebhook(settings, payload, { session, eventType: 'session_stopped' });
     }
   }
 
@@ -107,7 +142,7 @@ export class NotificationService {
     }
 
     if (settings.customWebhookUrl) {
-      await this.sendWebhook(settings.customWebhookUrl, payload);
+      await this.sendFormattedWebhook(settings, payload, { serverName, eventType: 'server_down' });
     }
   }
 
@@ -135,7 +170,7 @@ export class NotificationService {
     }
 
     if (settings.customWebhookUrl) {
-      await this.sendWebhook(settings.customWebhookUrl, payload);
+      await this.sendFormattedWebhook(settings, payload, { serverName, eventType: 'server_up' });
     }
   }
 
@@ -195,7 +230,184 @@ export class NotificationService {
     }
   }
 
-  private async sendWebhook(webhookUrl: string, payload: NotificationPayload): Promise<void> {
+  /**
+   * Send webhook with format-specific payload transformation
+   */
+  private async sendFormattedWebhook(
+    settings: Settings,
+    rawPayload: NotificationPayload,
+    context: {
+      violation?: ViolationWithDetails;
+      session?: ActiveSession;
+      serverName?: string;
+      eventType?: string;
+    }
+  ): Promise<void> {
+    if (!settings.customWebhookUrl) return;
+
+    const format: WebhookFormat = settings.webhookFormat ?? 'json';
+    let payload: unknown;
+
+    switch (format) {
+      case 'ntfy':
+        payload = this.buildNtfyPayload(rawPayload, settings.ntfyTopic, context);
+        break;
+      case 'apprise':
+        payload = this.buildApprisePayload(rawPayload, context);
+        break;
+      case 'json':
+      default:
+        payload = rawPayload;
+    }
+
+    await this.sendWebhook(settings.customWebhookUrl, payload);
+  }
+
+  /**
+   * Build ntfy-formatted payload
+   */
+  private buildNtfyPayload(
+    rawPayload: NotificationPayload,
+    topic: string | null,
+    context: {
+      violation?: ViolationWithDetails;
+      session?: ActiveSession;
+      serverName?: string;
+      eventType?: string;
+    }
+  ): NtfyPayload {
+    const { violation, session, serverName, eventType } = context;
+
+    // Default topic if not configured
+    const ntfyTopic = topic || 'tracearr';
+
+    if (violation) {
+      const ruleType = violation.rule.type as keyof typeof RULE_DISPLAY_NAMES;
+      const severity = violation.severity as keyof typeof SEVERITY_LEVELS;
+      return {
+        topic: ntfyTopic,
+        title: 'Violation Detected',
+        message: `User ${violation.user.username} triggered ${RULE_DISPLAY_NAMES[ruleType]} (${SEVERITY_LEVELS[severity].label} severity)`,
+        priority: severityToNtfyPriority(violation.severity),
+        tags: ['warning', 'rotating_light'],
+      };
+    }
+
+    if (session) {
+      if (eventType === 'session_started') {
+        return {
+          topic: ntfyTopic,
+          title: 'Stream Started',
+          message: `${session.user.username} started watching ${session.mediaTitle}`,
+          priority: 3,
+          tags: ['arrow_forward'],
+        };
+      }
+      // session_stopped
+      return {
+        topic: ntfyTopic,
+        title: 'Stream Stopped',
+        message: `${session.user.username} stopped watching ${session.mediaTitle}`,
+        priority: 3,
+        tags: ['stop_button'],
+      };
+    }
+
+    if (serverName) {
+      if (eventType === 'server_down') {
+        return {
+          topic: ntfyTopic,
+          title: 'Server Down',
+          message: `Lost connection to ${serverName}`,
+          priority: 5,
+          tags: ['rotating_light', 'x'],
+        };
+      }
+      // server_up
+      return {
+        topic: ntfyTopic,
+        title: 'Server Online',
+        message: `${serverName} is back online`,
+        priority: 4,
+        tags: ['white_check_mark'],
+      };
+    }
+
+    // Fallback for unknown event types
+    return {
+      topic: ntfyTopic,
+      title: rawPayload.event,
+      message: JSON.stringify(rawPayload.data),
+      priority: 3,
+      tags: ['bell'],
+    };
+  }
+
+  /**
+   * Build Apprise-formatted payload
+   */
+  private buildApprisePayload(
+    rawPayload: NotificationPayload,
+    context: {
+      violation?: ViolationWithDetails;
+      session?: ActiveSession;
+      serverName?: string;
+      eventType?: string;
+    }
+  ): ApprisePayload {
+    const { violation, session, serverName, eventType } = context;
+
+    if (violation) {
+      const ruleType = violation.rule.type as keyof typeof RULE_DISPLAY_NAMES;
+      const severity = violation.severity as keyof typeof SEVERITY_LEVELS;
+      return {
+        title: 'Violation Detected',
+        body: `User ${violation.user.username} triggered ${RULE_DISPLAY_NAMES[ruleType]} (${SEVERITY_LEVELS[severity].label} severity)`,
+        type: severityToAppriseType(violation.severity),
+      };
+    }
+
+    if (session) {
+      if (eventType === 'session_started') {
+        return {
+          title: 'Stream Started',
+          body: `${session.user.username} started watching ${session.mediaTitle}`,
+          type: 'info',
+        };
+      }
+      // session_stopped
+      return {
+        title: 'Stream Stopped',
+        body: `${session.user.username} stopped watching ${session.mediaTitle}`,
+        type: 'info',
+      };
+    }
+
+    if (serverName) {
+      if (eventType === 'server_down') {
+        return {
+          title: 'Server Down',
+          body: `Lost connection to ${serverName}`,
+          type: 'failure',
+        };
+      }
+      // server_up
+      return {
+        title: 'Server Online',
+        body: `${serverName} is back online`,
+        type: 'success',
+      };
+    }
+
+    // Fallback for unknown event types
+    return {
+      title: rawPayload.event,
+      body: JSON.stringify(rawPayload.data),
+      type: 'info',
+    };
+  }
+
+  private async sendWebhook(webhookUrl: string, payload: unknown): Promise<void> {
     const response = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
