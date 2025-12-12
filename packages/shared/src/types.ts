@@ -454,10 +454,6 @@ export interface Settings {
   customWebhookUrl: string | null;
   webhookFormat: WebhookFormat | null;
   ntfyTopic: string | null;
-  notifyOnViolation: boolean;
-  notifyOnSessionStart: boolean;
-  notifyOnSessionStop: boolean;
-  notifyOnServerDown: boolean;
   // Poller settings
   pollerEnabled: boolean;
   pollerIntervalMs: number;

@@ -207,10 +207,6 @@ export const updateSettingsSchema = z.object({
   customWebhookUrl: z.url().nullable().optional(),
   webhookFormat: webhookFormatSchema.nullable().optional(),
   ntfyTopic: z.string().max(200).nullable().optional(),
-  notifyOnViolation: z.boolean().optional(),
-  notifyOnSessionStart: z.boolean().optional(),
-  notifyOnSessionStop: z.boolean().optional(),
-  notifyOnServerDown: z.boolean().optional(),
   // Poller settings
   pollerEnabled: z.boolean().optional(),
   pollerIntervalMs: z.number().int().min(5000).max(300000).optional(),
