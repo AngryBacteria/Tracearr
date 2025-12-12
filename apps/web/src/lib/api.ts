@@ -25,6 +25,8 @@ import type {
   PlexDiscoveredServer,
   PlexDiscoveredConnection,
   PlexAvailableServersResponse,
+  NotificationChannelRouting,
+  NotificationEventType,
 } from '@tracearr/shared';
 
 // Re-export shared types needed by frontend components
@@ -586,6 +588,19 @@ class ApiClient {
     get: () => this.request<Settings>('/settings'),
     update: (data: Partial<Settings>) =>
       this.request<Settings>('/settings', { method: 'PATCH', body: JSON.stringify(data) }),
+  };
+
+  // Channel Routing
+  channelRouting = {
+    getAll: () => this.request<NotificationChannelRouting[]>('/settings/notifications/routing'),
+    update: (
+      eventType: NotificationEventType,
+      data: { discordEnabled?: boolean; webhookEnabled?: boolean }
+    ) =>
+      this.request<NotificationChannelRouting>(`/settings/notifications/routing/${eventType}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
   };
 
   // Import

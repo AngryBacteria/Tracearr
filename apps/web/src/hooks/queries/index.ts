@@ -58,6 +58,9 @@ export {
 // Settings hooks
 export { useSettings, useUpdateSettings } from './useSettings';
 
+// Channel Routing hooks
+export { useChannelRouting, useUpdateChannelRouting } from './useChannelRouting';
+
 // Mobile hooks
 export {
   useMobileConfig,
