@@ -6,7 +6,7 @@
 
 import type { FastifyPluginAsync } from 'fastify';
 import { eq, gte, sql, and } from 'drizzle-orm';
-import { REDIS_KEYS, TIME_MS, type DashboardStats, type ActiveSession, serverIdFilterSchema } from '@tracearr/shared';
+import { REDIS_KEYS, TIME_MS, type DashboardStats, serverIdFilterSchema } from '@tracearr/shared';
 import { db } from '../../db/client.js';
 import { sessions } from '../../db/schema.js';
 import {
@@ -16,6 +16,7 @@ import {
   uniqueUsersSince,
 } from '../../db/prepared.js';
 import { filterByServerAccess, validateServerAccess, buildServerAccessCondition } from '../../utils/serverFiltering.js';
+import { getCacheService } from '../../services/cache.js';
 
 export const dashboardRoutes: FastifyPluginAsync = async (app) => {
   /**
@@ -60,11 +61,11 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
       }
 
       // Get active streams count - filter by server access
-      const activeCached = await app.redis.get(REDIS_KEYS.ACTIVE_SESSIONS);
       let activeStreams = 0;
-      if (activeCached) {
+      const cacheService = getCacheService();
+      if (cacheService) {
         try {
-          let activeSessions = JSON.parse(activeCached) as ActiveSession[];
+          let activeSessions = await cacheService.getAllActiveSessions();
           // Filter by user's accessible servers
           activeSessions = filterByServerAccess(activeSessions, authUser);
           // If specific server requested, filter further
@@ -73,7 +74,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
           }
           activeStreams = activeSessions.length;
         } catch {
-          // Ignore
+          // Ignore cache errors - activeStreams stays 0
         }
       }
 
