@@ -8,14 +8,13 @@
  */
 
 import { eq, and, desc, isNull, gte, lte, inArray } from 'drizzle-orm';
-import { POLLING_INTERVALS, TIME_MS, REDIS_KEYS, CACHE_TTL, SESSION_LIMITS, type ActiveSession, type SessionState, type Rule } from '@tracearr/shared';
+import { POLLING_INTERVALS, TIME_MS, REDIS_KEYS, SESSION_LIMITS, type ActiveSession, type SessionState, type Rule } from '@tracearr/shared';
 import { db } from '../../db/client.js';
 import { servers, serverUsers, sessions, users } from '../../db/schema.js';
 import { createMediaServerClient } from '../../services/mediaServer/index.js';
 import { geoipService, type GeoLocation } from '../../services/geoip.js';
 import { ruleEngine } from '../../services/rules.js';
 import type { CacheService, PubSubService } from '../../services/cache.js';
-import { atomicMultiUpdate } from '../../services/cache.js';
 import type { Redis } from 'ioredis';
 import { sseManager } from '../../services/sseManager.js';
 
@@ -796,10 +795,10 @@ async function pollServers(): Promise<void> {
       return;
     }
 
-    // Get cached session keys
-    const cachedSessions = cacheService ? await cacheService.getActiveSessions() : null;
+    // Get cached session keys from atomic SET-based cache
+    const cachedSessions = cacheService ? await cacheService.getAllActiveSessions() : [];
     const cachedSessionKeys = new Set(
-      (cachedSessions ?? []).map((s) => `${s.serverId}:${s.sessionKey}`)
+      cachedSessions.map((s) => `${s.serverId}:${s.sessionKey}`)
     );
 
     // Get active rules
@@ -851,67 +850,46 @@ async function pollServers(): Promise<void> {
       allUpdatedSessions.push(...updatedSessions);
     }
 
-    // Update cache with current active sessions using atomic batch update
-    if (cacheService && redisClient) {
-      // Get IDs of servers that were polled this cycle
-      const polledServerIds = new Set(serversNeedingPoll.map((s) => s.id));
-
-      // Preserve sessions from SSE-connected servers (servers that weren't polled)
-      // This prevents overwriting SSE server sessions when we update the cache
-      const sseServerSessions = (cachedSessions ?? []).filter(
-        (s) => !polledServerIds.has(s.serverId)
-      );
-
-      // Combine: preserved SSE server sessions + new/updated from polled servers
-      const currentActiveSessions = [
-        ...sseServerSessions, // Keep SSE server sessions unchanged
-        ...allNewSessions, // New sessions from polled servers
-        ...allUpdatedSessions, // Updated sessions from polled servers
-      ];
-
-      // Build atomic cache updates for all sessions
-      const cacheUpdates: Array<{ key: string; value: unknown; ttl: number }> = [
-        // Main active sessions list
-        {
-          key: REDIS_KEYS.ACTIVE_SESSIONS,
-          value: currentActiveSessions,
-          ttl: CACHE_TTL.ACTIVE_SESSIONS,
-        },
-      ];
-
-      // Add individual session caches
-      for (const session of currentActiveSessions) {
-        cacheUpdates.push({
-          key: REDIS_KEYS.SESSION_BY_ID(session.id),
-          value: session,
-          ttl: CACHE_TTL.ACTIVE_SESSIONS,
-        });
-      }
-
-      // Atomic update all session caches at once
-      await atomicMultiUpdate(redisClient, cacheUpdates);
-
-      // Invalidate dashboard stats (will be recalculated)
-      await redisClient.del(REDIS_KEYS.DASHBOARD_STATS);
-
-      // Update user session sets (uses Redis SET data structure, separate from atomic batch)
-      for (const session of allNewSessions) {
-        await cacheService.addUserSession(session.serverUserId, session.id);
-      }
-
-      // Remove stopped sessions from cache
+    // Update cache incrementally (preserves concurrent SSE operations)
+    if (cacheService) {
+      // Extract stopped session IDs from the key format "serverId:sessionKey"
+      const stoppedSessionIds: string[] = [];
       for (const key of allStoppedKeys) {
         const parts = key.split(':');
         if (parts.length >= 2) {
           const serverId = parts[0];
           const sessionKey = parts.slice(1).join(':');
-
-          // Find the session to get its ID
-          const stoppedSession = cachedSessions?.find(
+          const stoppedSession = cachedSessions.find(
             (s) => s.serverId === serverId && s.sessionKey === sessionKey
           );
           if (stoppedSession) {
-            await cacheService.deleteSessionById(stoppedSession.id);
+            stoppedSessionIds.push(stoppedSession.id);
+          }
+        }
+      }
+
+      // Incremental sync: adds new, removes stopped, updates existing
+      await cacheService.incrementalSyncActiveSessions(
+        allNewSessions,
+        stoppedSessionIds,
+        allUpdatedSessions
+      );
+
+      // Update user session sets for new sessions
+      for (const session of allNewSessions) {
+        await cacheService.addUserSession(session.serverUserId, session.id);
+      }
+
+      // Remove stopped sessions from user session sets
+      for (const key of allStoppedKeys) {
+        const parts = key.split(':');
+        if (parts.length >= 2) {
+          const serverId = parts[0];
+          const sessionKey = parts.slice(1).join(':');
+          const stoppedSession = cachedSessions.find(
+            (s) => s.serverId === serverId && s.sessionKey === sessionKey
+          );
+          if (stoppedSession) {
             await cacheService.removeUserSession(stoppedSession.serverUserId, stoppedSession.id);
           }
         }
@@ -1144,6 +1122,9 @@ export async function triggerPoll(): Promise<void> {
  * This is a lighter poll that runs periodically to catch any events
  * that might have been missed by SSE. Only polls Plex servers that
  * have active SSE connections (not in fallback mode).
+ *
+ * Unlike the main poller, this processes results and updates the cache
+ * to sync any sessions that SSE may have missed.
  */
 export async function triggerReconciliationPoll(): Promise<void> {
   try {
@@ -1159,19 +1140,108 @@ export async function triggerReconciliationPoll(): Promise<void> {
 
     console.log(`[Poller] Running reconciliation poll for ${sseServers.length} SSE-connected server(s)`);
 
-    // Get cached session keys
-    const cachedSessions = cacheService ? await cacheService.getActiveSessions() : null;
+    // Get cached session keys from atomic SET-based cache
+    const cachedSessions = cacheService ? await cacheService.getAllActiveSessions() : [];
     const cachedSessionKeys = new Set(
-      (cachedSessions ?? []).map((s) => `${s.serverId}:${s.sessionKey}`)
+      cachedSessions.map((s) => `${s.serverId}:${s.sessionKey}`)
     );
 
     // Get active rules
     const activeRules = await getActiveRules();
 
-    // Process each SSE server
+    // Collect results from all SSE servers
+    const allNewSessions: ActiveSession[] = [];
+    const allStoppedKeys: string[] = [];
+    const allUpdatedSessions: ActiveSession[] = [];
+
+    // Process each SSE server and collect results
     for (const server of sseServers) {
       const serverWithToken = server as ServerWithToken;
-      await processServerSessions(serverWithToken, activeRules, cachedSessionKeys);
+      const { newSessions, stoppedSessionKeys, updatedSessions } = await processServerSessions(
+        serverWithToken,
+        activeRules,
+        cachedSessionKeys
+      );
+      allNewSessions.push(...newSessions);
+      allStoppedKeys.push(...stoppedSessionKeys);
+      allUpdatedSessions.push(...updatedSessions);
+    }
+
+    // Update cache incrementally if there were any changes
+    if (cacheService && (allNewSessions.length > 0 || allStoppedKeys.length > 0 || allUpdatedSessions.length > 0)) {
+      // Extract stopped session IDs from the key format "serverId:sessionKey"
+      const stoppedSessionIds: string[] = [];
+      for (const key of allStoppedKeys) {
+        const parts = key.split(':');
+        if (parts.length >= 2) {
+          const serverId = parts[0];
+          const sessionKey = parts.slice(1).join(':');
+          const stoppedSession = cachedSessions.find(
+            (s) => s.serverId === serverId && s.sessionKey === sessionKey
+          );
+          if (stoppedSession) {
+            stoppedSessionIds.push(stoppedSession.id);
+          }
+        }
+      }
+
+      // Incremental sync: adds new, removes stopped, updates existing
+      await cacheService.incrementalSyncActiveSessions(
+        allNewSessions,
+        stoppedSessionIds,
+        allUpdatedSessions
+      );
+
+      // Update user session sets for new sessions
+      for (const session of allNewSessions) {
+        await cacheService.addUserSession(session.serverUserId, session.id);
+      }
+
+      // Remove stopped sessions from user session sets
+      for (const key of allStoppedKeys) {
+        const parts = key.split(':');
+        if (parts.length >= 2) {
+          const serverId = parts[0];
+          const sessionKey = parts.slice(1).join(':');
+          const stoppedSession = cachedSessions.find(
+            (s) => s.serverId === serverId && s.sessionKey === sessionKey
+          );
+          if (stoppedSession) {
+            await cacheService.removeUserSession(stoppedSession.serverUserId, stoppedSession.id);
+          }
+        }
+      }
+
+      console.log(
+        `[Poller] Reconciliation complete: ${allNewSessions.length} new, ${allUpdatedSessions.length} updated, ${allStoppedKeys.length} stopped`
+      );
+    }
+
+    // Publish events via pub/sub for any changes
+    if (pubSubService) {
+      for (const session of allNewSessions) {
+        await pubSubService.publish('session:started', session);
+        await enqueueNotification({ type: 'session_started', payload: session });
+      }
+
+      for (const session of allUpdatedSessions) {
+        await pubSubService.publish('session:updated', session);
+      }
+
+      for (const key of allStoppedKeys) {
+        const parts = key.split(':');
+        if (parts.length >= 2) {
+          const serverId = parts[0];
+          const sessionKey = parts.slice(1).join(':');
+          const stoppedSession = cachedSessions.find(
+            (s) => s.serverId === serverId && s.sessionKey === sessionKey
+          );
+          if (stoppedSession) {
+            await pubSubService.publish('session:stopped', stoppedSession.id);
+            await enqueueNotification({ type: 'session_stopped', payload: stoppedSession });
+          }
+        }
+      }
     }
   } catch (error) {
     console.error('[Poller] Reconciliation poll error:', error);
