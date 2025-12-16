@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { MobileConfig } from '@tracearr/shared';
+import { toast } from 'sonner';
 import { api } from '@/lib/api';
-import { useToast } from '@/hooks/use-toast';
 
 export function useMobileConfig() {
   return useQuery({
@@ -13,30 +13,21 @@ export function useMobileConfig() {
 
 export function useEnableMobile() {
   const queryClient = useQueryClient();
-  const { toast } = useToast();
 
   return useMutation({
     mutationFn: api.mobile.enable,
     onSuccess: (data) => {
       queryClient.setQueryData<MobileConfig>(['mobile', 'config'], data);
-      toast({
-        title: 'Mobile Access Enabled',
-        description: 'Scan the QR code with the Tracearr mobile app to connect.',
-      });
+      toast.success('Mobile Access Enabled', { description: 'Scan the QR code with the Tracearr mobile app to connect.' });
     },
     onError: (err) => {
-      toast({
-        title: 'Failed to Enable Mobile Access',
-        description: err.message,
-        variant: 'destructive',
-      });
+      toast.error('Failed to Enable Mobile Access', { description: err.message });
     },
   });
 }
 
 export function useDisableMobile() {
   const queryClient = useQueryClient();
-  const { toast } = useToast();
 
   return useMutation({
     mutationFn: api.mobile.disable,
@@ -45,70 +36,46 @@ export function useDisableMobile() {
         if (!old) return old;
         return { ...old, isEnabled: false, token: null, sessions: [] };
       });
-      toast({
-        title: 'Mobile Access Disabled',
-        description: 'All mobile sessions have been revoked.',
-      });
+      toast.success('Mobile Access Disabled', { description: 'All mobile sessions have been revoked.' });
     },
     onError: (err) => {
-      toast({
-        title: 'Failed to Disable Mobile Access',
-        description: err.message,
-        variant: 'destructive',
-      });
+      toast.error('Failed to Disable Mobile Access', { description: err.message });
     },
   });
 }
 
 export function useGeneratePairToken() {
   const queryClient = useQueryClient();
-  const { toast } = useToast();
 
   return useMutation({
     mutationFn: api.mobile.generatePairToken,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['mobile', 'config'] });
-      toast({
-        title: 'Pair Token Generated',
-        description: 'Scan the QR code with your mobile device to pair.',
-      });
+      toast.success('Pair Token Generated', { description: 'Scan the QR code with your mobile device to pair.' });
     },
     onError: (err) => {
-      toast({
-        title: 'Failed to Generate Pair Token',
-        description: err.message,
-        variant: 'destructive',
-      });
+      toast.error('Failed to Generate Pair Token', { description: err.message });
     },
   });
 }
 
 export function useRevokeSession() {
   const queryClient = useQueryClient();
-  const { toast } = useToast();
 
   return useMutation({
     mutationFn: (sessionId: string) => api.mobile.revokeSession(sessionId),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['mobile', 'config'] });
-      toast({
-        title: 'Device Removed',
-        description: 'The device has been disconnected.',
-      });
+      toast.success('Device Removed', { description: 'The device has been disconnected.' });
     },
     onError: (err) => {
-      toast({
-        title: 'Failed to Remove Device',
-        description: err.message,
-        variant: 'destructive',
-      });
+      toast.error('Failed to Remove Device', { description: err.message });
     },
   });
 }
 
 export function useRevokeMobileSessions() {
   const queryClient = useQueryClient();
-  const { toast } = useToast();
 
   return useMutation({
     mutationFn: api.mobile.revokeSessions,
@@ -117,17 +84,10 @@ export function useRevokeMobileSessions() {
         if (!old) return old;
         return { ...old, sessions: [] };
       });
-      toast({
-        title: 'Sessions Revoked',
-        description: `${data.revokedCount} mobile session(s) have been revoked.`,
-      });
+      toast.success('Sessions Revoked', { description: `${data.revokedCount} mobile session(s) have been revoked.` });
     },
     onError: (err) => {
-      toast({
-        title: 'Failed to Revoke Sessions',
-        description: err.message,
-        variant: 'destructive',
-      });
+      toast.error('Failed to Revoke Sessions', { description: err.message });
     },
   });
 }

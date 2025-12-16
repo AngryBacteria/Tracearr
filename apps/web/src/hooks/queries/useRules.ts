@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Rule } from '@tracearr/shared';
+import { toast } from 'sonner';
 import { api } from '@/lib/api';
-import { useToast } from '@/hooks/use-toast';
 
 export function useRules() {
   return useQuery({
@@ -13,71 +13,47 @@ export function useRules() {
 
 export function useCreateRule() {
   const queryClient = useQueryClient();
-  const { toast } = useToast();
 
   return useMutation({
     mutationFn: (data: Omit<Rule, 'id' | 'createdAt' | 'updatedAt'>) =>
       api.rules.create(data),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['rules', 'list'] });
-      toast({
-        title: 'Rule Created',
-        description: 'The rule has been created successfully.',
-      });
+      toast.success('Rule Created', { description: 'The rule has been created successfully.' });
     },
     onError: (error: Error) => {
-      toast({
-        title: 'Failed to Create Rule',
-        description: error.message,
-        variant: 'destructive',
-      });
+      toast.error('Failed to Create Rule', { description: error.message });
     },
   });
 }
 
 export function useUpdateRule() {
   const queryClient = useQueryClient();
-  const { toast } = useToast();
 
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: Partial<Rule> }) =>
       api.rules.update(id, data),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['rules', 'list'] });
-      toast({
-        title: 'Rule Updated',
-        description: 'The rule has been updated successfully.',
-      });
+      toast.success('Rule Updated', { description: 'The rule has been updated successfully.' });
     },
     onError: (error: Error) => {
-      toast({
-        title: 'Failed to Update Rule',
-        description: error.message,
-        variant: 'destructive',
-      });
+      toast.error('Failed to Update Rule', { description: error.message });
     },
   });
 }
 
 export function useDeleteRule() {
   const queryClient = useQueryClient();
-  const { toast } = useToast();
 
   return useMutation({
     mutationFn: (id: string) => api.rules.delete(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['rules', 'list'] });
-      toast({
-        title: 'Rule Deleted',
-        description: 'The rule has been deleted successfully.',
-      });
+      toast.success('Rule Deleted', { description: 'The rule has been deleted successfully.' });
     },
     onError: (error: Error) => {
-      toast({
-        title: 'Failed to Delete Rule',
-        description: error.message,
-        variant: 'destructive',
-      });
+      toast.error('Failed to Delete Rule', { description: error.message });
     },
   });
 }

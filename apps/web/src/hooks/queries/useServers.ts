@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { SERVER_STATS_CONFIG, type ServerResourceDataPoint } from '@tracearr/shared';
+import { toast } from 'sonner';
 import { api } from '@/lib/api';
-import { useToast } from '@/hooks/use-toast';
 import { useRef, useCallback } from 'react';
 
 export function useServers() {
@@ -14,54 +14,37 @@ export function useServers() {
 
 export function useCreateServer() {
   const queryClient = useQueryClient();
-  const { toast } = useToast();
 
   return useMutation({
     mutationFn: (data: { name: string; type: string; url: string; token: string }) =>
       api.servers.create(data),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['servers', 'list'] });
-      toast({
-        title: 'Server Added',
-        description: 'The server has been added successfully.',
-      });
+      toast.success('Server Added', { description: 'The server has been added successfully.' });
     },
     onError: (error: Error) => {
-      toast({
-        title: 'Failed to Add Server',
-        description: error.message,
-        variant: 'destructive',
-      });
+      toast.error('Failed to Add Server', { description: error.message });
     },
   });
 }
 
 export function useDeleteServer() {
   const queryClient = useQueryClient();
-  const { toast } = useToast();
 
   return useMutation({
     mutationFn: (id: string) => api.servers.delete(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['servers', 'list'] });
-      toast({
-        title: 'Server Removed',
-        description: 'The server has been removed successfully.',
-      });
+      toast.success('Server Removed', { description: 'The server has been removed successfully.' });
     },
     onError: (error: Error) => {
-      toast({
-        title: 'Failed to Remove Server',
-        description: error.message,
-        variant: 'destructive',
-      });
+      toast.error('Failed to Remove Server', { description: error.message });
     },
   });
 }
 
 export function useSyncServer() {
   const queryClient = useQueryClient();
-  const { toast } = useToast();
 
   return useMutation({
     mutationFn: (id: string) => api.servers.sync(id),
@@ -80,23 +63,16 @@ export function useSyncServer() {
         ? parts.join(', ')
         : 'No changes detected';
 
-      toast({
-        title: data.success ? 'Server Synced' : 'Sync Completed with Errors',
-        description,
-        variant: data.errors.length > 0 ? 'destructive' : 'default',
-      });
-
-      // Log errors to console for debugging
       if (data.errors.length > 0) {
+        toast.warning(data.success ? 'Sync Completed with Errors' : 'Sync Completed with Errors', { description });
+        // Log errors to console for debugging
         console.error('Sync errors:', data.errors);
+      } else {
+        toast.success('Server Synced', { description });
       }
     },
     onError: (error: Error) => {
-      toast({
-        title: 'Sync Failed',
-        description: error.message,
-        variant: 'destructive',
-      });
+      toast.error('Sync Failed', { description: error.message });
     },
   });
 }

@@ -12,7 +12,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import { useToast } from '@/components/ui/use-toast';
+import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { api, tokenStorage, type PlexServerInfo } from '@/lib/api';
 import { LogoIcon } from '@/components/brand/Logo';
@@ -26,7 +26,6 @@ type AuthStep = 'initial' | 'plex-waiting' | 'server-select';
 export function Login() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { toast } = useToast();
   const { isAuthenticated, isLoading: authLoading, refetch } = useAuth();
 
   // Setup status - default to false (Sign In mode) since most users are returning
@@ -131,15 +130,13 @@ export function Login() {
         // User authenticated (returning or no servers)
         tokenStorage.setTokens(result.accessToken, result.refreshToken);
         void refetch();
-        toast({ title: 'Success', description: 'Logged in successfully!' });
+        toast.success('Success', { description: 'Logged in successfully!' });
         void navigate('/');
       }
     } catch (error) {
       resetPlexAuth();
-      toast({
-        title: 'Authentication failed',
+      toast.error('Authentication failed', {
         description: error instanceof Error ? error.message : 'Plex authentication failed',
-        variant: 'destructive',
       });
     }
   };
@@ -168,10 +165,8 @@ export function Login() {
     } catch (error) {
       closePlexPopup();
       setAuthStep('initial');
-      toast({
-        title: 'Error',
+      toast.error('Error', {
         description: error instanceof Error ? error.message : 'Failed to start Plex login',
-        variant: 'destructive',
       });
     }
   };
@@ -193,15 +188,13 @@ export function Login() {
       if (result.accessToken && result.refreshToken) {
         tokenStorage.setTokens(result.accessToken, result.refreshToken);
         void refetch();
-        toast({ title: 'Success', description: `Connected to ${serverName}` });
+        toast.success('Success', { description: `Connected to ${serverName}` });
         void navigate('/');
       }
     } catch (error) {
       setConnectingToServer(null);
-      toast({
-        title: 'Connection failed',
+      toast.error('Connection failed', {
         description: error instanceof Error ? error.message : 'Failed to connect to server',
-        variant: 'destructive',
       });
     }
   };
@@ -235,14 +228,12 @@ export function Login() {
       if (result.accessToken && result.refreshToken) {
         tokenStorage.setTokens(result.accessToken, result.refreshToken);
         void refetch();
-        toast({ title: 'Success', description: 'Account created successfully!' });
+        toast.success('Success', { description: 'Account created successfully!' });
         void navigate('/');
       }
     } catch (error) {
-      toast({
-        title: 'Signup failed',
+      toast.error('Signup failed', {
         description: error instanceof Error ? error.message : 'Failed to create account',
-        variant: 'destructive',
       });
     } finally {
       setLocalLoading(false);
@@ -263,14 +254,12 @@ export function Login() {
       if (result.accessToken && result.refreshToken) {
         tokenStorage.setTokens(result.accessToken, result.refreshToken);
         void refetch();
-        toast({ title: 'Success', description: 'Logged in successfully!' });
+        toast.success('Success', { description: 'Logged in successfully!' });
         void navigate('/');
       }
     } catch (error) {
-      toast({
-        title: 'Login failed',
+      toast.error('Login failed', {
         description: error instanceof Error ? error.message : 'Invalid email or password',
-        variant: 'destructive',
       });
     } finally {
       setLocalLoading(false);
@@ -293,14 +282,12 @@ export function Login() {
         setJellyfinUsername('');
         setJellyfinPassword('');
         void refetch();
-        toast({ title: 'Success', description: 'Logged in successfully!' });
+        toast.success('Success', { description: 'Logged in successfully!' });
         void navigate('/');
       }
     } catch (error) {
-      toast({
-        title: 'Login failed',
+      toast.error('Login failed', {
         description: error instanceof Error ? error.message : 'Invalid username or password, or user is not an administrator',
-        variant: 'destructive',
       });
     } finally {
       setJellyfinLoading(false);

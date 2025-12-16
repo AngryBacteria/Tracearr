@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { NotificationChannelRouting, NotificationEventType } from '@tracearr/shared';
+import { toast } from 'sonner';
 import { api } from '@/lib/api';
-import { useToast } from '@/hooks/use-toast';
 
 export function useChannelRouting() {
   return useQuery({
@@ -13,7 +13,6 @@ export function useChannelRouting() {
 
 export function useUpdateChannelRouting() {
   const queryClient = useQueryClient();
-  const { toast } = useToast();
 
   return useMutation({
     mutationFn: ({
@@ -51,11 +50,7 @@ export function useUpdateChannelRouting() {
       if (context?.previousRouting) {
         queryClient.setQueryData(['channelRouting'], context.previousRouting);
       }
-      toast({
-        title: 'Failed to Update Routing',
-        description: err.message,
-        variant: 'destructive',
-      });
+      toast.error('Failed to Update Routing', { description: err.message });
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['channelRouting'] });

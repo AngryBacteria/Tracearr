@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { ViolationWithDetails, PaginatedResponse, ViolationSeverity } from '@tracearr/shared';
+import { toast } from 'sonner';
 import { api } from '@/lib/api';
-import { useToast } from '@/hooks/use-toast';
 
 interface ViolationsParams {
   page?: number;
@@ -22,7 +22,6 @@ export function useViolations(params: ViolationsParams = {}) {
 
 export function useAcknowledgeViolation() {
   const queryClient = useQueryClient();
-  const { toast } = useToast();
 
   return useMutation({
     mutationFn: (id: string) => api.violations.acknowledge(id),
@@ -57,43 +56,28 @@ export function useAcknowledgeViolation() {
           queryClient.setQueryData(queryKey, data);
         }
       }
-      toast({
-        title: 'Failed to Acknowledge',
-        description: (err).message,
-        variant: 'destructive',
-      });
+      toast.error('Failed to Acknowledge', { description: (err).message });
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['violations'] });
       void queryClient.invalidateQueries({ queryKey: ['stats', 'dashboard'] });
-      toast({
-        title: 'Violation Acknowledged',
-        description: 'The violation has been marked as acknowledged.',
-      });
+      toast.success('Violation Acknowledged', { description: 'The violation has been marked as acknowledged.' });
     },
   });
 }
 
 export function useDismissViolation() {
   const queryClient = useQueryClient();
-  const { toast } = useToast();
 
   return useMutation({
     mutationFn: (id: string) => api.violations.dismiss(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['violations'] });
       void queryClient.invalidateQueries({ queryKey: ['stats', 'dashboard'] });
-      toast({
-        title: 'Violation Dismissed',
-        description: 'The violation has been dismissed.',
-      });
+      toast.success('Violation Dismissed', { description: 'The violation has been dismissed.' });
     },
     onError: (error: Error) => {
-      toast({
-        title: 'Failed to Dismiss',
-        description: error.message,
-        variant: 'destructive',
-      });
+      toast.error('Failed to Dismiss', { description: error.message });
     },
   });
 }

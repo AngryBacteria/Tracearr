@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Settings } from '@tracearr/shared';
+import { toast } from 'sonner';
 import { api } from '@/lib/api';
-import { useToast } from '@/hooks/use-toast';
 
 export function useSettings() {
   return useQuery({
@@ -13,7 +13,6 @@ export function useSettings() {
 
 export function useUpdateSettings() {
   const queryClient = useQueryClient();
-  const { toast } = useToast();
 
   return useMutation({
     mutationFn: (data: Partial<Settings>) => api.settings.update(data),
@@ -37,18 +36,11 @@ export function useUpdateSettings() {
       if (context?.previousSettings) {
         queryClient.setQueryData(['settings'], context.previousSettings);
       }
-      toast({
-        title: 'Failed to Update Settings',
-        description: (err).message,
-        variant: 'destructive',
-      });
+      toast.error('Failed to Update Settings', { description: (err).message });
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['settings'] });
-      toast({
-        title: 'Settings Updated',
-        description: 'Your settings have been saved.',
-      });
+      toast.success('Settings Updated', { description: 'Your settings have been saved.' });
     },
   });
 }

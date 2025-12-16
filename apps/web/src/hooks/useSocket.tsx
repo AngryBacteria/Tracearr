@@ -18,7 +18,7 @@ import type {
 } from '@tracearr/shared';
 import { WS_EVENTS } from '@tracearr/shared';
 import { useAuth } from './useAuth';
-import { useToast } from './use-toast';
+import { toast } from 'sonner';
 import { tokenStorage } from '@/lib/api';
 
 type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
@@ -35,7 +35,6 @@ const SocketContext = createContext<SocketContextValue | null>(null);
 export function SocketProvider({ children }: { children: ReactNode }) {
   const { isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
-  const { toast } = useToast();
   const [socket, setSocket] = useState<TypedSocket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
 
@@ -90,8 +89,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       void queryClient.invalidateQueries({ queryKey: ['stats', 'dashboard'] });
       void queryClient.invalidateQueries({ queryKey: ['sessions', 'list'] });
 
-      toast({
-        title: 'New Stream Started',
+      toast.info('New Stream Started', {
         description: `${session.user.identityName ?? session.user.username} is watching ${session.mediaTitle}`,
       });
     });
@@ -114,17 +112,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       void queryClient.invalidateQueries({ queryKey: ['violations'] });
       void queryClient.invalidateQueries({ queryKey: ['stats', 'dashboard'] });
 
-      // Show toast notification
-      const severityColors = {
-        low: 'default',
-        warning: 'default',
-        high: 'destructive',
-      } as const;
-
-      toast({
-        title: `New Violation: ${violation.rule.name}`,
+      // Show toast notification based on severity
+      const toastFn = violation.severity === 'high' ? toast.error : toast.warning;
+      toastFn(`New Violation: ${violation.rule.name}`, {
         description: `${violation.user.identityName ?? violation.user.username} triggered ${violation.rule.type}`,
-        variant: severityColors[violation.severity],
       });
     });
 
@@ -138,7 +129,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     return () => {
       newSocket.disconnect();
     };
-  }, [isAuthenticated, queryClient, toast]);
+  }, [isAuthenticated, queryClient]);
 
   const subscribeSessions = useCallback(() => {
     if (socket && isConnected) {
