@@ -104,6 +104,13 @@ if [ ! -f /data/postgres/PG_VERSION ]; then
     # Ensure data directory exists (may not if bind mount path is new)
     mkdir -p /data/postgres
 
+    # Check if this looks like an existing installation (secrets exist)
+    # If secrets exist but postgres is empty, volumes may have been disconnected
+    EXISTING_INSTALL=false
+    if [ -f /data/tracearr/.jwt_secret ] || [ -f /data/tracearr/.cookie_secret ]; then
+        EXISTING_INSTALL=true
+    fi
+
     # Handle corrupt/partial initialization (has files but no PG_VERSION)
     if [ "$(ls -A /data/postgres 2>/dev/null)" ]; then
         # Check if this looks like a real database (has pg_control)
@@ -115,16 +122,51 @@ if [ ! -f /data/postgres/PG_VERSION ]; then
             chown postgres:postgres /data/postgres/PG_VERSION
             log "Created PG_VERSION file, will attempt to start existing database"
         else
-            # No pg_control means truly corrupt/empty - safe to reinitialize
+            # No pg_control - could be corrupt or volume mount issue
+            if [ "$EXISTING_INSTALL" = true ] && [ "$FORCE_DB_REINIT" != "true" ]; then
+                error "=========================================================="
+                error "DATA LOSS PREVENTION: Database appears corrupt or missing"
+                error "=========================================================="
+                error ""
+                error "Found existing secrets but PostgreSQL data is invalid."
+                error "This usually means:"
+                error "  1. Volume was not properly mounted after container update"
+                error "  2. Database was corrupted"
+                error ""
+                error "If this is a FRESH INSTALL, set: FORCE_DB_REINIT=true"
+                error "If this is an UPDATE, check your volume mounts!"
+                error ""
+                error "Your data may still exist in a Docker volume."
+                error "Run: docker volume ls | grep tracearr"
+                error "=========================================================="
+                exit 1
+            fi
             warn "Data directory has no valid database (missing global/pg_control)"
-            warn "Clearing for fresh initialization..."
+            warn "Initializing fresh database..."
             rm -rf /data/postgres/*
             chown -R postgres:postgres /data/postgres
             gosu postgres /usr/lib/postgresql/15/bin/initdb -D /data/postgres
             init_postgres_db
         fi
     else
-        # Empty directory - fresh install
+        # Empty directory
+        if [ "$EXISTING_INSTALL" = true ] && [ "$FORCE_DB_REINIT" != "true" ]; then
+            error "=========================================================="
+            error "DATA LOSS PREVENTION: Empty database with existing secrets"
+            error "=========================================================="
+            error ""
+            error "Found existing secrets but PostgreSQL data directory is empty."
+            error "This usually means volumes were not properly mounted."
+            error ""
+            error "If this is intentional, set: FORCE_DB_REINIT=true"
+            error "Otherwise, check your volume configuration!"
+            error ""
+            error "Your data may still exist in a Docker volume."
+            error "Run: docker volume ls | grep tracearr"
+            error "=========================================================="
+            exit 1
+        fi
+        # Fresh install
         chown -R postgres:postgres /data/postgres
         gosu postgres /usr/lib/postgresql/15/bin/initdb -D /data/postgres
         init_postgres_db
