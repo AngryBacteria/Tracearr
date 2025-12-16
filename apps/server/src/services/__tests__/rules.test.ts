@@ -489,6 +489,148 @@ describe('RuleEngine', () => {
 
       expect(results).toHaveLength(0);
     });
+
+    it('should exclude sessions from the same device (likely stale session data)', async () => {
+      const sharedDeviceId = 'device-shared-123';
+
+      // Session from same device at different location (stale data)
+      const activeSession = createMockSession({
+        serverUserId,
+        state: 'playing',
+        deviceId: sharedDeviceId,
+        geoLat: TEST_LOCATIONS.tokyo.lat,
+        geoLon: TEST_LOCATIONS.tokyo.lon,
+      });
+
+      const currentSession = createMockSession({
+        serverUserId,
+        state: 'playing',
+        deviceId: sharedDeviceId, // Same device
+        geoLat: TEST_LOCATIONS.newYork.lat,
+        geoLon: TEST_LOCATIONS.newYork.lon,
+      });
+
+      const rule = createMockRule('simultaneous_locations', {
+        params: { minDistanceKm: 100 },
+      });
+
+      const results = await ruleEngine.evaluateSession(
+        currentSession,
+        [rule],
+        [activeSession]
+      );
+
+      // Should not violate - same device can't be in two places
+      expect(results).toHaveLength(0);
+    });
+
+    it('should still violate when different devices are in different locations', async () => {
+      const activeSession = createMockSession({
+        serverUserId,
+        state: 'playing',
+        deviceId: 'device-123',
+        geoLat: TEST_LOCATIONS.tokyo.lat,
+        geoLon: TEST_LOCATIONS.tokyo.lon,
+      });
+
+      const currentSession = createMockSession({
+        serverUserId,
+        state: 'playing',
+        deviceId: 'device-456', // Different device
+        geoLat: TEST_LOCATIONS.newYork.lat,
+        geoLon: TEST_LOCATIONS.newYork.lon,
+      });
+
+      const rule = createMockRule('simultaneous_locations', {
+        params: { minDistanceKm: 100 },
+      });
+
+      const results = await ruleEngine.evaluateSession(
+        currentSession,
+        [rule],
+        [activeSession]
+      );
+
+      // Should violate - different devices in distant locations
+      expect(results).toHaveLength(1);
+      expect(results[0]!.violated).toBe(true);
+    });
+
+    it('should not exclude when deviceId is null on either session', async () => {
+      const activeSession = createMockSession({
+        serverUserId,
+        state: 'playing',
+        deviceId: null, // No device ID
+        geoLat: TEST_LOCATIONS.tokyo.lat,
+        geoLon: TEST_LOCATIONS.tokyo.lon,
+      });
+
+      const currentSession = createMockSession({
+        serverUserId,
+        state: 'playing',
+        deviceId: 'device-123',
+        geoLat: TEST_LOCATIONS.newYork.lat,
+        geoLon: TEST_LOCATIONS.newYork.lon,
+      });
+
+      const rule = createMockRule('simultaneous_locations', {
+        params: { minDistanceKm: 100 },
+      });
+
+      const results = await ruleEngine.evaluateSession(
+        currentSession,
+        [rule],
+        [activeSession]
+      );
+
+      // Should violate - can't determine if same device when deviceId is null
+      expect(results).toHaveLength(1);
+      expect(results[0]!.violated).toBe(true);
+    });
+
+    it('should include relatedSessionIds in violation data', async () => {
+      const activeSessions = [
+        createMockSession({
+          id: 'session-la',
+          serverUserId,
+          state: 'playing',
+          deviceId: 'device-1',
+          geoLat: TEST_LOCATIONS.losAngeles.lat,
+          geoLon: TEST_LOCATIONS.losAngeles.lon,
+        }),
+        createMockSession({
+          id: 'session-tokyo',
+          serverUserId,
+          state: 'playing',
+          deviceId: 'device-2',
+          geoLat: TEST_LOCATIONS.tokyo.lat,
+          geoLon: TEST_LOCATIONS.tokyo.lon,
+        }),
+      ];
+
+      const currentSession = createMockSession({
+        id: 'session-ny',
+        serverUserId,
+        state: 'playing',
+        deviceId: 'device-3',
+        geoLat: TEST_LOCATIONS.newYork.lat,
+        geoLon: TEST_LOCATIONS.newYork.lon,
+      });
+
+      const rule = createMockRule('simultaneous_locations', {
+        params: { minDistanceKm: 100 },
+      });
+
+      const results = await ruleEngine.evaluateSession(
+        currentSession,
+        [rule],
+        activeSessions
+      );
+
+      expect(results).toHaveLength(1);
+      expect(results[0]!.data.relatedSessionIds).toContain('session-la');
+      expect(results[0]!.data.relatedSessionIds).toContain('session-tokyo');
+    });
   });
 
   describe('device_velocity', () => {
@@ -770,6 +912,117 @@ describe('RuleEngine', () => {
 
       // Only current session counts for this user
       expect(results).toHaveLength(0);
+    });
+
+    it('should exclude sessions from the same device (reconnects/stale sessions)', async () => {
+      const sharedDeviceId = 'device-shared-123';
+
+      // Two sessions from same device - should be treated as one stream
+      const activeSessions = [
+        createMockSession({ serverUserId, state: 'playing', deviceId: sharedDeviceId }),
+        createMockSession({ serverUserId, state: 'playing', deviceId: 'device-other-456' }),
+      ];
+
+      const currentSession = createMockSession({
+        serverUserId,
+        state: 'playing',
+        deviceId: sharedDeviceId, // Same device as first active session
+      });
+
+      const rule = createMockRule('concurrent_streams', {
+        params: { maxStreams: 2 },
+      });
+
+      const results = await ruleEngine.evaluateSession(
+        currentSession,
+        [rule],
+        activeSessions
+      );
+
+      // Should only count 2 streams: current session + device-other-456
+      // The device-shared-123 session should be excluded (same device as current)
+      expect(results).toHaveLength(0);
+    });
+
+    it('should not exclude sessions when deviceId is null on current session', async () => {
+      const activeSessions = [
+        createMockSession({ serverUserId, state: 'playing', deviceId: 'device-123' }),
+        createMockSession({ serverUserId, state: 'playing', deviceId: 'device-456' }),
+      ];
+
+      const currentSession = createMockSession({
+        serverUserId,
+        state: 'playing',
+        deviceId: null, // No device ID
+      });
+
+      const rule = createMockRule('concurrent_streams', {
+        params: { maxStreams: 2 },
+      });
+
+      const results = await ruleEngine.evaluateSession(
+        currentSession,
+        [rule],
+        activeSessions
+      );
+
+      // Should count all 3 streams since we can't determine device identity
+      expect(results).toHaveLength(1);
+      expect(results[0]!.data.activeStreamCount).toBe(3);
+    });
+
+    it('should not exclude sessions when deviceId is null on active session', async () => {
+      const activeSessions = [
+        createMockSession({ serverUserId, state: 'playing', deviceId: null }), // No device ID
+        createMockSession({ serverUserId, state: 'playing', deviceId: 'device-456' }),
+      ];
+
+      const currentSession = createMockSession({
+        serverUserId,
+        state: 'playing',
+        deviceId: 'device-123',
+      });
+
+      const rule = createMockRule('concurrent_streams', {
+        params: { maxStreams: 2 },
+      });
+
+      const results = await ruleEngine.evaluateSession(
+        currentSession,
+        [rule],
+        activeSessions
+      );
+
+      // Should count all 3 streams since null deviceId can't be matched
+      expect(results).toHaveLength(1);
+      expect(results[0]!.data.activeStreamCount).toBe(3);
+    });
+
+    it('should include relatedSessionIds in violation data', async () => {
+      const activeSessions = [
+        createMockSession({ id: 'session-1', serverUserId, state: 'playing', deviceId: 'device-1' }),
+        createMockSession({ id: 'session-2', serverUserId, state: 'playing', deviceId: 'device-2' }),
+      ];
+
+      const currentSession = createMockSession({
+        id: 'session-current',
+        serverUserId,
+        state: 'playing',
+        deviceId: 'device-current',
+      });
+
+      const rule = createMockRule('concurrent_streams', {
+        params: { maxStreams: 2 },
+      });
+
+      const results = await ruleEngine.evaluateSession(
+        currentSession,
+        [rule],
+        activeSessions
+      );
+
+      expect(results).toHaveLength(1);
+      expect(results[0]!.data.relatedSessionIds).toEqual(['session-1', 'session-2']);
     });
   });
 

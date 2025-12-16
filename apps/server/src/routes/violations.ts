@@ -214,6 +214,16 @@ export const violationRoutes: FastifyPluginAsync = async (app) => {
         ['concurrent_streams', 'simultaneous_locations', 'device_velocity'].includes(v.ruleType)
       );
 
+      // Collect all relatedSessionIds from violation data for direct lookup
+      const allRelatedSessionIds = new Set<string>();
+      for (const v of violationsNeedingData) {
+        const vData = v.data as Record<string, unknown> | null;
+        const relatedIds = (vData?.relatedSessionIds as string[]) || [];
+        for (const id of relatedIds) {
+          allRelatedSessionIds.add(id);
+        }
+      }
+
       // Batch fetch historical data by serverUserId to avoid N+1 queries
       const historicalDataByUserId = new Map<
         string,
@@ -229,6 +239,9 @@ export const violationRoutes: FastifyPluginAsync = async (app) => {
 
       // Batch fetch related sessions by (serverUserId, ruleType) to avoid N+1 queries
       const relatedSessionsByViolation = new Map<string, ViolationSessionInfo[]>();
+
+      // Map to store fetched sessions by ID for direct lookup from relatedSessionIds
+      const sessionsById = new Map<string, ViolationSessionInfo>();
 
       // Wrap batching in try-catch to handle errors gracefully (e.g., in tests or when queries fail)
       try {
@@ -291,6 +304,47 @@ export const violationRoutes: FastifyPluginAsync = async (app) => {
               historicalDataByUserId.set(serverUserId, sessions);
             }
             // If rejected, that user just won't have historical data (already handled in catch)
+          }
+        }
+
+        // Batch fetch sessions by ID from relatedSessionIds stored in violation data
+        if (allRelatedSessionIds.size > 0) {
+          try {
+            const relatedSessionsResult = await db
+              .select({
+                id: sessions.id,
+                mediaTitle: sessions.mediaTitle,
+                mediaType: sessions.mediaType,
+                grandparentTitle: sessions.grandparentTitle,
+                seasonNumber: sessions.seasonNumber,
+                episodeNumber: sessions.episodeNumber,
+                year: sessions.year,
+                ipAddress: sessions.ipAddress,
+                geoCity: sessions.geoCity,
+                geoRegion: sessions.geoRegion,
+                geoCountry: sessions.geoCountry,
+                geoLat: sessions.geoLat,
+                geoLon: sessions.geoLon,
+                playerName: sessions.playerName,
+                device: sessions.device,
+                deviceId: sessions.deviceId,
+                platform: sessions.platform,
+                product: sessions.product,
+                quality: sessions.quality,
+                startedAt: sessions.startedAt,
+              })
+              .from(sessions)
+              .where(inArray(sessions.id, Array.from(allRelatedSessionIds)));
+
+            for (const s of relatedSessionsResult) {
+              sessionsById.set(s.id, {
+                ...s,
+                deviceId: s.deviceId ?? null,
+              });
+            }
+          } catch (error) {
+            console.error('[Violations] Failed to batch fetch related sessions by ID:', error);
+            // Continue without related sessions - fallback to time-based logic
           }
         }
 
@@ -420,8 +474,21 @@ export const violationRoutes: FastifyPluginAsync = async (app) => {
 
       // Transform flat data into nested structure expected by frontend
       const formattedData = violationData.map((v) => {
-        // Fetch related sessions for violations that involve multiple streams
-        const relatedSessions = relatedSessionsByViolation.get(v.id) ?? [];
+        // Fetch related sessions - prioritize using relatedSessionIds from violation data
+        // This is more accurate than time-based queries
+        const vData = v.data as Record<string, unknown> | null;
+        const relatedSessionIdsFromData = (vData?.relatedSessionIds as string[]) || [];
+
+        let relatedSessions: ViolationSessionInfo[] = [];
+        if (relatedSessionIdsFromData.length > 0) {
+          // Use the stored relatedSessionIds for direct lookup (preferred)
+          relatedSessions = relatedSessionIdsFromData
+            .map((id) => sessionsById.get(id))
+            .filter((s): s is ViolationSessionInfo => s !== undefined);
+        } else {
+          // Fallback to time-based query results for older violations
+          relatedSessions = relatedSessionsByViolation.get(v.id) ?? [];
+        }
 
         // For concurrent_streams, simultaneous_locations, and device_velocity, fetch related sessions
         // Also fetch user's historical data for comparison

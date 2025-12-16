@@ -28,7 +28,7 @@ import {
   shouldForceStopStaleSession,
   shouldRecordSession,
 } from './stateTracker.js';
-import { createViolationInTransaction, broadcastViolations, doesRuleApplyToUser, type ViolationInsertResult } from './violations.js';
+import { createViolationInTransaction, broadcastViolations, doesRuleApplyToUser, isDuplicateViolation, type ViolationInsertResult } from './violations.js';
 import { enqueueNotification } from '../notificationQueue.js';
 
 // ============================================================================
@@ -533,6 +533,20 @@ async function processServerSessions(
                 (r) => doesRuleApplyToUser(r, serverUserId)
               );
               if (matchingRule) {
+                // Check for duplicate violations before creating
+                // This prevents multiple violations when sessions start simultaneously
+                const relatedSessionIds = (result.data?.relatedSessionIds as string[]) || [];
+                const isDuplicate = await isDuplicateViolation(
+                  serverUserId,
+                  matchingRule.type,
+                  inserted.id,
+                  relatedSessionIds
+                );
+
+                if (isDuplicate) {
+                  continue; // Skip creating duplicate violation
+                }
+
                 const violationResult = await createViolationInTransaction(
                   tx,
                   matchingRule.id,

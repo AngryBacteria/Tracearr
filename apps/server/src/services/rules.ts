@@ -144,31 +144,54 @@ export class RuleEngine {
         s.geoLat !== null &&
         s.geoLon !== null &&
         session.geoLat !== null &&
-        session.geoLon !== null
+        session.geoLon !== null &&
+        // Exclude sessions from the same device (likely stale session data)
+        !(session.deviceId && s.deviceId && session.deviceId === s.deviceId)
     );
 
-    for (const activeSession of activeSessions) {
+    // Find all sessions at different locations (distance > minDistanceKm)
+    const conflictingSessions = activeSessions.filter((activeSession) => {
       const distance = this.calculateDistance(
         activeSession.geoLat!,
         activeSession.geoLon!,
         session.geoLat!,
         session.geoLon!
       );
+      return distance > params.minDistanceKm;
+    });
 
-      if (distance > params.minDistanceKm) {
-        return {
-          violated: true,
-          severity: 'warning',
-          data: {
-            locations: [
-              { lat: activeSession.geoLat, lon: activeSession.geoLon },
-              { lat: session.geoLat, lon: session.geoLon },
-            ],
-            distance,
-            minRequiredDistance: params.minDistanceKm,
-          },
-        };
-      }
+    if (conflictingSessions.length > 0) {
+      // Calculate max distance for reporting
+      const maxDistance = Math.max(
+        ...conflictingSessions.map((s) =>
+          this.calculateDistance(s.geoLat!, s.geoLon!, session.geoLat!, session.geoLon!)
+        )
+      );
+
+      // Collect all unique locations (including triggering session)
+      const allLocations = [
+        { lat: session.geoLat, lon: session.geoLon, sessionId: session.id },
+        ...conflictingSessions.map((s) => ({
+          lat: s.geoLat,
+          lon: s.geoLon,
+          sessionId: s.id,
+        })),
+      ];
+
+      // Collect all session IDs for deduplication and related sessions lookup
+      const relatedSessionIds = conflictingSessions.map((s) => s.id);
+
+      return {
+        violated: true,
+        severity: 'warning',
+        data: {
+          locations: allLocations,
+          locationCount: allLocations.length,
+          distance: maxDistance,
+          minRequiredDistance: params.minDistanceKm,
+          relatedSessionIds,
+        },
+      };
     }
 
     return { violated: false, severity: 'low', data: {} };
@@ -210,19 +233,28 @@ export class RuleEngine {
     params: ConcurrentStreamsParams
   ): RuleEvaluationResult {
     const activeSessions = recentSessions.filter(
-      (s) => s.serverUserId === session.serverUserId && s.state === 'playing'
+      (s) =>
+        s.serverUserId === session.serverUserId &&
+        s.state === 'playing' &&
+        // Exclude sessions from the same device (likely reconnects/stale sessions)
+        // A single device can only play one stream at a time
+        !(session.deviceId && s.deviceId && session.deviceId === s.deviceId)
     );
 
     // Add 1 for current session
     const totalStreams = activeSessions.length + 1;
 
     if (totalStreams > params.maxStreams) {
+      // Collect all session IDs for deduplication and related sessions lookup
+      const relatedSessionIds = activeSessions.map((s) => s.id);
+
       return {
         violated: true,
         severity: 'low',
         data: {
           activeStreamCount: totalStreams,
           maxAllowedStreams: params.maxStreams,
+          relatedSessionIds,
         },
       };
     }

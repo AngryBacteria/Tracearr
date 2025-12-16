@@ -5,14 +5,14 @@
  * and determining rule applicability.
  */
 
-import { eq, sql } from 'drizzle-orm';
+import { eq, sql, and, isNull, gte } from 'drizzle-orm';
 import type { ExtractTablesWithRelations } from 'drizzle-orm';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
 import type { PostgresJsQueryResultHKT } from 'drizzle-orm/postgres-js';
-import type { Rule, ViolationSeverity, ViolationWithDetails } from '@tracearr/shared';
-import { WS_EVENTS } from '@tracearr/shared';
+import type { Rule, ViolationSeverity, ViolationWithDetails, RuleType } from '@tracearr/shared';
+import { WS_EVENTS, TIME_MS } from '@tracearr/shared';
 import { db } from '../../db/client.js';
-import { servers, serverUsers, sessions, violations, users } from '../../db/schema.js';
+import { servers, serverUsers, sessions, violations, users, rules } from '../../db/schema.js';
 import type * as schema from '../../db/schema.js';
 import type { RuleEvaluationResult } from '../../services/rules.js';
 import type { PubSubService } from '../../services/cache.js';
@@ -38,6 +38,102 @@ type TransactionContext = PgTransaction<PostgresJsQueryResultHKT, typeof schema,
  */
 export function getTrustScorePenalty(severity: ViolationSeverity): number {
   return severity === 'high' ? 20 : severity === 'warning' ? 10 : 5;
+}
+
+// ============================================================================
+// Violation Deduplication
+// ============================================================================
+
+// Deduplication window - violations within this time window with overlapping sessions are considered duplicates
+const VIOLATION_DEDUP_WINDOW_MS = 5 * TIME_MS.MINUTE;
+
+/**
+ * Check if a duplicate violation already exists for the same user/rule type with overlapping sessions.
+ *
+ * This prevents creating multiple violations when:
+ * - Multiple sessions start simultaneously and each sees the others as active
+ * - The same violation event is detected by both SSE and poller
+ *
+ * A violation is considered a duplicate if:
+ * - Same serverUserId
+ * - Same rule type (not just ruleId - any rule of the same type)
+ * - Created within the dedup window
+ * - Not yet acknowledged
+ * - Any overlap in relatedSessionIds OR the triggering session is in the other's related sessions
+ *
+ * @param serverUserId - Server user who violated the rule
+ * @param ruleType - Type of rule (concurrent_streams, simultaneous_locations, etc.)
+ * @param triggeringSessionId - The session that triggered this violation
+ * @param relatedSessionIds - Session IDs involved in this violation
+ * @returns true if a duplicate violation exists
+ */
+export async function isDuplicateViolation(
+  serverUserId: string,
+  ruleType: RuleType,
+  triggeringSessionId: string,
+  relatedSessionIds: string[]
+): Promise<boolean> {
+  // Only deduplicate for rules that involve multiple sessions
+  if (!['concurrent_streams', 'simultaneous_locations'].includes(ruleType)) {
+    return false;
+  }
+
+  const windowStart = new Date(Date.now() - VIOLATION_DEDUP_WINDOW_MS);
+
+  // Find recent unacknowledged violations for same user and rule type
+  const recentViolations = await db
+    .select({
+      id: violations.id,
+      sessionId: violations.sessionId,
+      data: violations.data,
+    })
+    .from(violations)
+    .innerJoin(rules, eq(violations.ruleId, rules.id))
+    .where(
+      and(
+        eq(violations.serverUserId, serverUserId),
+        eq(rules.type, ruleType),
+        isNull(violations.acknowledgedAt),
+        gte(violations.createdAt, windowStart)
+      )
+    );
+
+  if (recentViolations.length === 0) {
+    return false;
+  }
+
+  // Check for overlap with any recent violation
+  for (const existing of recentViolations) {
+    const existingData = existing.data as Record<string, unknown> | null;
+    const existingRelatedIds = (existingData?.relatedSessionIds as string[]) || [];
+
+    // Case 1: This triggering session is already covered as a related session in an existing violation
+    if (existingRelatedIds.includes(triggeringSessionId)) {
+      console.log(
+        `[Violations] Skipping duplicate: triggering session ${triggeringSessionId} is related to existing violation ${existing.id}`
+      );
+      return true;
+    }
+
+    // Case 2: The existing violation's triggering session is in our related sessions
+    if (existing.sessionId && relatedSessionIds.includes(existing.sessionId)) {
+      console.log(
+        `[Violations] Skipping duplicate: existing violation ${existing.id} triggered by session in our related sessions`
+      );
+      return true;
+    }
+
+    // Case 3: Any overlap in related session IDs
+    const hasOverlap = relatedSessionIds.some((id) => existingRelatedIds.includes(id));
+    if (hasOverlap) {
+      console.log(
+        `[Violations] Skipping duplicate: overlapping related sessions with existing violation ${existing.id}`
+      );
+      return true;
+    }
+  }
+
+  return false;
 }
 
 // ============================================================================

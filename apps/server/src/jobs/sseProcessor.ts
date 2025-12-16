@@ -23,7 +23,7 @@ import { ruleEngine } from '../services/rules.js';
 import { mapMediaSession } from './poller/sessionMapper.js';
 import { calculatePauseAccumulation, calculateStopDuration, checkWatchCompletion } from './poller/stateTracker.js';
 import { getActiveRules, batchGetRecentUserSessions } from './poller/database.js';
-import { createViolation } from './poller/violations.js';
+import { createViolation, isDuplicateViolation } from './poller/violations.js';
 import { enqueueNotification } from './notificationQueue.js';
 import { triggerReconciliationPoll } from './poller/index.js';
 
@@ -491,6 +491,20 @@ async function createNewSession(
       (r) => (r.serverUserId === null || r.serverUserId === serverUserId) && result.violated
     );
     if (matchingRule) {
+      // Check for duplicate violations before creating
+      // This prevents multiple violations when sessions start simultaneously
+      const relatedSessionIds = (result.data?.relatedSessionIds as string[]) || [];
+      const isDuplicate = await isDuplicateViolation(
+        serverUserId,
+        matchingRule.type,
+        inserted.id,
+        relatedSessionIds
+      );
+
+      if (isDuplicate) {
+        continue; // Skip creating duplicate violation
+      }
+
       // TODO: Refactor to use createViolationInTransaction pattern for atomicity
       // Session is already inserted before rule evaluation, so using standalone function for now
       // eslint-disable-next-line @typescript-eslint/no-deprecated
