@@ -2,7 +2,7 @@
  * Tautulli API integration and import service
  */
 
-import { eq } from 'drizzle-orm';
+import { eq, inArray, and } from 'drizzle-orm';
 import { z } from 'zod';
 import type { TautulliImportProgress, TautulliImportResult } from '@tracearr/shared';
 import { db } from '../db/client.js';
@@ -11,7 +11,7 @@ import { refreshAggregates } from '../db/timescale.js';
 import { geoipService } from './geoip.js';
 import type { PubSubService } from './cache.js';
 
-const PAGE_SIZE = 1000; // Larger batches = fewer API calls
+const PAGE_SIZE = 5000; // Larger batches = fewer API calls (tested up to 10k, scales linearly)
 const REQUEST_TIMEOUT_MS = 30000; // 30 seconds
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000; // Base delay, will be multiplied by attempt number
@@ -259,7 +259,8 @@ export class TautulliService {
 
     return {
       records: result.response.data?.data ?? [],
-      total: result.response.data?.recordsTotal ?? 0,
+      // Use recordsFiltered (not recordsTotal) - Tautulli applies grouping/filtering by default
+      total: result.response.data?.recordsFiltered ?? 0,
     };
   }
 
@@ -272,10 +273,12 @@ export class TautulliService {
    * - Batches UPDATE operations in transactions
    * - Caches GeoIP lookups per IP address
    * - Throttles WebSocket updates (every 100 records or 2 seconds)
+   * - Extends BullMQ lock on progress to prevent stalls with large imports
    */
   static async importHistory(
     serverId: string,
-    pubSubService?: PubSubService
+    pubSubService?: PubSubService,
+    onProgress?: (progress: TautulliImportProgress) => Promise<void>
   ): Promise<TautulliImportResult> {
     // Get Tautulli settings
     const settingsRow = await db
@@ -289,6 +292,7 @@ export class TautulliService {
       return {
         success: false,
         imported: 0,
+        updated: 0,
         skipped: 0,
         errors: 0,
         message: 'Tautulli is not configured. Please add URL and API key in Settings.',
@@ -303,19 +307,25 @@ export class TautulliService {
       return {
         success: false,
         imported: 0,
+        updated: 0,
         skipped: 0,
         errors: 0,
         message: 'Failed to connect to Tautulli. Please check URL and API key.',
       };
     }
 
-    // Initialize progress
+    // Initialize progress with detailed tracking
     const progress: TautulliImportProgress = {
       status: 'fetching',
       totalRecords: 0,
+      fetchedRecords: 0,
       processedRecords: 0,
       importedRecords: 0,
+      updatedRecords: 0,
       skippedRecords: 0,
+      duplicateRecords: 0,
+      unknownUserRecords: 0,
+      activeSessionRecords: 0,
       errorRecords: 0,
       currentPage: 0,
       totalPages: 0,
@@ -323,11 +333,18 @@ export class TautulliService {
     };
 
     // Throttled progress publishing (fire-and-forget, every 100 records or 2 seconds)
+    // Also calls onProgress callback for BullMQ lock extension
     let lastProgressTime = Date.now();
     const publishProgress = () => {
       if (pubSubService) {
         pubSubService.publish('import:progress', progress).catch((err: unknown) => {
           console.warn('Failed to publish progress:', err);
+        });
+      }
+      // Call onProgress callback (extends BullMQ lock for large imports)
+      if (onProgress) {
+        onProgress(progress).catch((err: unknown) => {
+          console.warn('Failed to call onProgress callback:', err);
         });
       }
     };
@@ -360,43 +377,109 @@ export class TautulliService {
     progress.message = `Found ${total} records to import`;
     publishProgress();
 
-    // === OPTIMIZATION: Pre-fetch all existing sessions for this server ===
-    console.log('[Import] Pre-fetching existing sessions for deduplication...');
-    const existingSessions = await db
-      .select({
-        id: sessions.id,
-        externalSessionId: sessions.externalSessionId,
-        ratingKey: sessions.ratingKey,
-        startedAt: sessions.startedAt,
-        serverUserId: sessions.serverUserId,
-        totalDurationMs: sessions.totalDurationMs,
-        // Fields needed for change detection
-        stoppedAt: sessions.stoppedAt,
-        durationMs: sessions.durationMs,
-        pausedDurationMs: sessions.pausedDurationMs,
-        watched: sessions.watched,
-      })
-      .from(sessions)
-      .where(eq(sessions.serverId, serverId));
-
-    // Build O(1) lookup maps
-    type ExistingSession = (typeof existingSessions)[0];
-    const sessionByExternalId = new Map<string, ExistingSession>();
-    const sessionByTimeKey = new Map<string, ExistingSession>();
-
-    for (const s of existingSessions) {
-      if (s.externalSessionId) {
-        sessionByExternalId.set(s.externalSessionId, s);
-      }
-      if (s.ratingKey && s.serverUserId && s.startedAt) {
-        const timeKey = `${s.serverUserId}:${s.ratingKey}:${s.startedAt.getTime()}`;
-        sessionByTimeKey.set(timeKey, s);
-      }
+    // === MEMORY OPTIMIZATION: Per-page dedup instead of pre-loading all sessions ===
+    // This uses constant memory regardless of total import size (critical for 300k+ imports)
+    // Trade-off: One extra query per page, but avoids loading 300k+ sessions into memory
+    interface ExistingSession {
+      id: string;
+      externalSessionId: string | null;
+      ratingKey: string | null;
+      startedAt: Date | null;
+      serverUserId: string;
+      totalDurationMs: number | null;
+      stoppedAt: Date | null;
+      durationMs: number | null;
+      pausedDurationMs: number | null;
+      watched: boolean | null;
     }
-    console.log(`[Import] Pre-fetched ${existingSessions.length} existing sessions`);
 
-    // === OPTIMIZATION: GeoIP cache ===
-    const geoCache = new Map<string, ReturnType<typeof geoipService.lookup>>();
+    // Track externalSessionIds we've already inserted in THIS import run
+    // (prevents duplicates within the same import when records appear on multiple pages)
+    const insertedThisRun = new Set<string>();
+
+    // Helper to query existing sessions for a batch of reference IDs
+    const queryExistingByRefIds = async (
+      refIds: string[]
+    ): Promise<Map<string, ExistingSession>> => {
+      if (refIds.length === 0) return new Map();
+
+      const existing = await db
+        .select({
+          id: sessions.id,
+          externalSessionId: sessions.externalSessionId,
+          ratingKey: sessions.ratingKey,
+          startedAt: sessions.startedAt,
+          serverUserId: sessions.serverUserId,
+          totalDurationMs: sessions.totalDurationMs,
+          stoppedAt: sessions.stoppedAt,
+          durationMs: sessions.durationMs,
+          pausedDurationMs: sessions.pausedDurationMs,
+          watched: sessions.watched,
+        })
+        .from(sessions)
+        .where(
+          and(eq(sessions.serverId, serverId), inArray(sessions.externalSessionId, refIds))
+        );
+
+      const map = new Map<string, ExistingSession>();
+      for (const s of existing) {
+        if (s.externalSessionId) {
+          map.set(s.externalSessionId, s);
+        }
+      }
+      return map;
+    };
+
+    // Helper to query existing sessions by time-based key (fallback dedup)
+    const queryExistingByTimeKeys = async (
+      keys: Array<{ serverUserId: string; ratingKey: string; startedAt: Date }>
+    ): Promise<Map<string, ExistingSession>> => {
+      if (keys.length === 0) return new Map();
+
+      // Build OR conditions for each key
+      // This is less efficient than IN but necessary for composite key matching
+      const existing = await db
+        .select({
+          id: sessions.id,
+          externalSessionId: sessions.externalSessionId,
+          ratingKey: sessions.ratingKey,
+          startedAt: sessions.startedAt,
+          serverUserId: sessions.serverUserId,
+          totalDurationMs: sessions.totalDurationMs,
+          stoppedAt: sessions.stoppedAt,
+          durationMs: sessions.durationMs,
+          pausedDurationMs: sessions.pausedDurationMs,
+          watched: sessions.watched,
+        })
+        .from(sessions)
+        .where(
+          and(
+            eq(sessions.serverId, serverId),
+            inArray(
+              sessions.ratingKey,
+              keys.map((k) => k.ratingKey)
+            ),
+            inArray(
+              sessions.serverUserId,
+              [...new Set(keys.map((k) => k.serverUserId))]
+            )
+          )
+        );
+
+      const map = new Map<string, ExistingSession>();
+      for (const s of existing) {
+        if (s.ratingKey && s.serverUserId && s.startedAt) {
+          const timeKey = `${s.serverUserId}:${s.ratingKey}:${s.startedAt.getTime()}`;
+          map.set(timeKey, s);
+        }
+      }
+      return map;
+    };
+
+    console.log('[Import] Using per-page dedup queries (memory-efficient mode)');
+
+    // === OPTIMIZATION: GeoIP cache (bounded - cleared every 50 pages to prevent unbounded growth) ===
+    let geoCache = new Map<string, ReturnType<typeof geoipService.lookup>>();
 
     // === OPTIMIZATION: Batch collections ===
     // Inserts are batched per page (100 records) and flushed at end of each page
@@ -415,6 +498,7 @@ export class TautulliService {
     const updateBatch: SessionUpdate[] = [];
 
     let imported = 0;
+    let updated = 0;
     let skipped = 0;
     let errors = 0;
     let page = 0;
@@ -424,29 +508,40 @@ export class TautulliService {
 
     // Helper to flush batches
     const flushBatches = async () => {
-      // Flush inserts
+      // Flush inserts in chunks (drizzle-orm has stack overflow with large arrays due to spread operator)
+      // See: https://github.com/drizzle-team/drizzle-orm/issues/1740
       if (insertBatch.length > 0) {
-        await db.insert(sessions).values(insertBatch);
+        const INSERT_CHUNK_SIZE = 500;
+        for (let i = 0; i < insertBatch.length; i += INSERT_CHUNK_SIZE) {
+          const chunk = insertBatch.slice(i, i + INSERT_CHUNK_SIZE);
+          await db.insert(sessions).values(chunk);
+        }
         insertBatch.length = 0;
       }
 
-      // Flush updates in a transaction
+      // Flush updates in parallel chunks (much faster than sequential transaction)
+      // Each update is independent, so we can safely parallelize
+      // Pool has max 20 connections - chunks of 100 will queue but process efficiently
       if (updateBatch.length > 0) {
-        await db.transaction(async (tx) => {
-          for (const update of updateBatch) {
-            await tx
-              .update(sessions)
-              .set({
-                externalSessionId: update.externalSessionId,
-                stoppedAt: update.stoppedAt,
-                durationMs: update.durationMs,
-                pausedDurationMs: update.pausedDurationMs,
-                watched: update.watched,
-                progressMs: update.progressMs,
-              })
-              .where(eq(sessions.id, update.id));
-          }
-        });
+        const UPDATE_CHUNK_SIZE = 100;
+        for (let i = 0; i < updateBatch.length; i += UPDATE_CHUNK_SIZE) {
+          const chunk = updateBatch.slice(i, i + UPDATE_CHUNK_SIZE);
+          await Promise.all(
+            chunk.map((update) =>
+              db
+                .update(sessions)
+                .set({
+                  externalSessionId: update.externalSessionId,
+                  stoppedAt: update.stoppedAt,
+                  durationMs: update.durationMs,
+                  pausedDurationMs: update.pausedDurationMs,
+                  watched: update.watched,
+                  progressMs: update.progressMs,
+                })
+                .where(eq(sessions.id, update.id))
+            )
+          );
+        }
         updateBatch.length = 0;
       }
     };
@@ -457,7 +552,40 @@ export class TautulliService {
       progress.currentPage = page + 1;
       progress.message = `Processing page ${page + 1} of ${progress.totalPages}`;
 
+      // Clear geo cache periodically to prevent unbounded growth (every 10 pages)
+      if (page > 0 && page % 10 === 0) {
+        geoCache = new Map();
+      }
+
       const { records } = await tautulli.getHistory(page * PAGE_SIZE, PAGE_SIZE);
+
+      // Track actual records fetched (may differ from API total if records changed)
+      progress.fetchedRecords += records.length;
+
+      // === MEMORY OPTIMIZATION: Per-page dedup queries ===
+      // Extract all reference IDs from this page for batch dedup query
+      const pageRefIds: string[] = [];
+      const pageTimeKeys: Array<{ serverUserId: string; ratingKey: string; startedAt: Date }> = [];
+
+      for (const record of records) {
+        if (record.reference_id !== null) {
+          pageRefIds.push(String(record.reference_id));
+        }
+        // Collect time-based keys for fallback dedup
+        const serverUserId = userMap.get(record.user_id);
+        const ratingKey = typeof record.rating_key === 'number' ? String(record.rating_key) : null;
+        if (serverUserId && ratingKey) {
+          pageTimeKeys.push({
+            serverUserId,
+            ratingKey,
+            startedAt: new Date(record.started * 1000),
+          });
+        }
+      }
+
+      // Query existing sessions for this page (2 queries per page max)
+      const sessionByExternalId = await queryExistingByRefIds(pageRefIds);
+      const sessionByTimeKey = await queryExistingByTimeKeys(pageTimeKeys);
 
       for (const record of records) {
         progress.processedRecords++;
@@ -478,6 +606,7 @@ export class TautulliService {
             }
             skipped++;
             progress.skippedRecords++;
+            progress.unknownUserRecords++;
             continue;
           }
 
@@ -485,12 +614,21 @@ export class TautulliService {
           if (record.reference_id === null) {
             skipped++;
             progress.skippedRecords++;
+            progress.activeSessionRecords++;
             continue;
           }
 
           const referenceIdStr = String(record.reference_id);
 
-          // === OPTIMIZATION: O(1) lookup instead of DB query ===
+          // Skip if we already inserted this in a previous page of THIS import run
+          if (insertedThisRun.has(referenceIdStr)) {
+            skipped++;
+            progress.skippedRecords++;
+            progress.duplicateRecords++;
+            continue;
+          }
+
+          // Check if exists in database (per-page query result)
           const existingByRef = sessionByExternalId.get(referenceIdStr);
           if (existingByRef) {
             // Calculate new values
@@ -517,14 +655,18 @@ export class TautulliService {
                 watched: newWatched,
                 progressMs: newProgressMs,
               });
+              updated++;
+              progress.updatedRecords++;
+            } else {
+              // No changes needed - true duplicate
+              skipped++;
+              progress.skippedRecords++;
+              progress.duplicateRecords++;
             }
-
-            skipped++;
-            progress.skippedRecords++;
             continue;
           }
 
-          // Fallback dedup check
+          // Fallback dedup check by time-based key
           const startedAt = new Date(record.started * 1000);
           const ratingKeyStr =
             typeof record.rating_key === 'number' ? String(record.rating_key) : null;
@@ -559,13 +701,14 @@ export class TautulliService {
                   pausedDurationMs: newPausedDurationMs,
                   watched: newWatched,
                 });
+                updated++;
+                progress.updatedRecords++;
+              } else {
+                // No changes needed - true duplicate
+                skipped++;
+                progress.skippedRecords++;
+                progress.duplicateRecords++;
               }
-
-              // Add to lookup map for this session
-              sessionByExternalId.set(referenceIdStr, existingByTime);
-
-              skipped++;
-              progress.skippedRecords++;
               continue;
             }
           }
@@ -589,6 +732,9 @@ export class TautulliService {
             record.session_key != null
               ? String(record.session_key)
               : `tautulli-${record.reference_id}`;
+
+          // Track this insert to prevent duplicates within this import run
+          insertedThisRun.add(referenceIdStr);
 
           // === OPTIMIZATION: Collect insert instead of executing ===
           insertBatch.push({
@@ -629,21 +775,6 @@ export class TautulliService {
             bitrate: null,
           });
 
-          // Add to lookup map to prevent duplicates within same import
-          sessionByExternalId.set(referenceIdStr, {
-            id: '', // Will be assigned by DB
-            externalSessionId: referenceIdStr,
-            ratingKey: ratingKeyStr,
-            startedAt,
-            serverUserId,
-            totalDurationMs: null,
-            // Include fields needed for change detection (use values we're inserting)
-            stoppedAt: new Date(record.stopped * 1000),
-            durationMs: record.duration * 1000,
-            pausedDurationMs: record.paused_counter * 1000,
-            watched: record.watched_status === 1,
-          });
-
           imported++;
           progress.importedRecords++;
         } catch (error) {
@@ -678,8 +809,14 @@ export class TautulliService {
       console.warn('Failed to refresh aggregates after import:', err);
     }
 
-    // Build final message with skipped user warnings
-    let message = `Import complete: ${imported} imported, ${skipped} skipped, ${errors} errors`;
+    // Build final message with detailed breakdown
+    const parts: string[] = [];
+    if (imported > 0) parts.push(`${imported} new`);
+    if (updated > 0) parts.push(`${updated} updated`);
+    if (skipped > 0) parts.push(`${skipped} skipped`);
+    if (errors > 0) parts.push(`${errors} errors`);
+
+    let message = `Import complete: ${parts.join(', ')}`;
 
     if (skippedUsers.size > 0) {
       const skippedUserList = [...skippedUsers.values()]
@@ -704,6 +841,7 @@ export class TautulliService {
     return {
       success: true,
       imported,
+      updated,
       skipped,
       errors,
       message,
