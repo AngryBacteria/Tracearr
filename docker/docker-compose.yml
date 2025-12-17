@@ -33,6 +33,7 @@ services:
       context: .
       dockerfile: Dockerfile.timescale
     image: tracearr-timescale:latest
+    shm_size: 256mb  # Required for PostgreSQL shared memory
     environment:
       - POSTGRES_USER=tracearr
       - POSTGRES_PASSWORD=${DB_PASSWORD:-tracearr}

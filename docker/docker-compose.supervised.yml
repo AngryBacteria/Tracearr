@@ -17,6 +17,7 @@
 services:
   tracearr:
     image: ghcr.io/connorgallopo/tracearr:supervised
+    shm_size: 256mb  # Required for PostgreSQL shared memory
     ports:
       - "${PORT:-3000}:3000"
     environment:
