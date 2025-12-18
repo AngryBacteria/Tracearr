@@ -37,8 +37,8 @@ export const TautulliHistoryRecordSchema = z.object({
   play_duration: z.number(), // Actual play time
   paused_counter: z.number(),
 
-  // User info
-  user_id: z.number(),
+  // User info (coerce handles string/number inconsistency across Tautulli versions)
+  user_id: z.coerce.number(),
   user: z.string(),
   friendly_name: z.string(),
   user_thumb: z.string(), // User avatar URL
@@ -104,7 +104,7 @@ export const TautulliHistoryResponseSchema = z.object({
 });
 
 export const TautulliUserRecordSchema = z.object({
-  user_id: z.number(),
+  user_id: z.coerce.number(),
   username: z.string(),
   friendly_name: z.string(),
   email: z.string().nullable(), // Can be null for local users
