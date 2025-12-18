@@ -305,9 +305,16 @@ describe('CacheService', () => {
     });
 
     it('should invalidate dashboard stats when setting sessions', async () => {
+      // Set up timezone-specific dashboard stats (as used in production)
+      redis.store.set('tracearr:stats:dashboard:UTC', JSON.stringify({ activeStreams: 1 }));
+      redis.store.set('tracearr:stats:dashboard:America/New_York', JSON.stringify({ activeStreams: 1 }));
+
       await cache.setActiveSessions([sampleSession] as never);
 
-      expect(redis.del).toHaveBeenCalledWith('tracearr:stats:dashboard');
+      // Should have called keys to find timezone-specific stats
+      expect(redis.keys).toHaveBeenCalledWith('tracearr:stats:dashboard:*');
+      // Should have deleted the matched keys
+      expect(redis.del).toHaveBeenCalledWith('tracearr:stats:dashboard:UTC', 'tracearr:stats:dashboard:America/New_York');
     });
 
     it('should return null on JSON parse error', async () => {
@@ -564,13 +571,13 @@ describe('CacheService', () => {
       const session = createTestActiveSession('session-1');
       await cache.addActiveSession(session);
 
-      // Set some dashboard stats
-      redis.store.set('tracearr:stats:dashboard', JSON.stringify({ activeStreams: 1 }));
+      // Set some dashboard stats (using timezone-specific keys as in production)
+      redis.store.set('tracearr:stats:dashboard:UTC', JSON.stringify({ activeStreams: 1 }));
 
       await cache.removeActiveSession('session-1');
 
       // Dashboard stats should be deleted
-      expect(redis.store.has('tracearr:stats:dashboard')).toBe(false);
+      expect(redis.store.has('tracearr:stats:dashboard:UTC')).toBe(false);
     });
 
     it('should handle removing non-existent session gracefully', async () => {
