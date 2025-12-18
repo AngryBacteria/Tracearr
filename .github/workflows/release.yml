@@ -210,6 +210,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Update GeoIP database
+        run: |
+          echo "Downloading latest GeoLite2-City database..."
+          curl -sSL "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=${{ secrets.MAXMIND_LICENSE_KEY }}&suffix=tar.gz" \
+            -o /tmp/geolite2.tar.gz && \
+          tar -xzf /tmp/geolite2.tar.gz -C /tmp && \
+          mv /tmp/GeoLite2-City_*/GeoLite2-City.mmdb data/GeoLite2-City.mmdb && \
+          echo "Successfully updated GeoLite2-City.mmdb" || \
+          echo "Download failed, using existing database as fallback"
+          ls -la data/GeoLite2-City.mmdb
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -332,6 +343,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Update GeoIP database
+        run: |
+          echo "Downloading latest GeoLite2-City database..."
+          curl -sSL "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=${{ secrets.MAXMIND_LICENSE_KEY }}&suffix=tar.gz" \
+            -o /tmp/geolite2.tar.gz && \
+          tar -xzf /tmp/geolite2.tar.gz -C /tmp && \
+          mv /tmp/GeoLite2-City_*/GeoLite2-City.mmdb data/GeoLite2-City.mmdb && \
+          echo "Successfully updated GeoLite2-City.mmdb" || \
+          echo "Download failed, using existing database as fallback"
+          ls -la data/GeoLite2-City.mmdb
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
