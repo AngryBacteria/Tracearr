@@ -40,6 +40,7 @@ concurrency:
 
 env:
   EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+  HUSKY: 0
 
 jobs:
   # Atomically prepare and reserve version numbers before builds start
@@ -54,8 +55,6 @@ jobs:
       marketing-version: ${{ steps.versions.outputs.marketing-version }}
       android-version-code: ${{ steps.versions.outputs.android-version-code }}
       ios-build-number: ${{ steps.versions.outputs.ios-build-number }}
-    env:
-      HUSKY: 0
 
     steps:
       - name: Checkout
@@ -143,8 +142,6 @@ jobs:
         working-directory: apps/mobile
     outputs:
       artifact-path: ${{ steps.build.outputs.artifact-path }}
-    env:
-      HUSKY: 0
 
     steps:
       - name: Checkout
@@ -245,8 +242,6 @@ jobs:
         working-directory: apps/mobile
     outputs:
       artifact-path: ${{ steps.build.outputs.artifact-path }}
-    env:
-      HUSKY: 0
 
     steps:
       - name: Checkout
@@ -326,8 +321,6 @@ jobs:
     defaults:
       run:
         working-directory: apps/mobile
-    env:
-      HUSKY: 0
 
     steps:
       - name: Checkout

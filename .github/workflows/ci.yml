@@ -10,6 +10,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  HUSKY: 0
+
 jobs:
   lint-and-typecheck:
     name: Lint & Typecheck
@@ -18,7 +21,6 @@ jobs:
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
       TURBO_TEAM: ${{ vars.TURBO_TEAM }}
-      HUSKY: 0
 
     steps:
       - name: Checkout
@@ -60,7 +62,6 @@ jobs:
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
       TURBO_TEAM: ${{ vars.TURBO_TEAM }}
-      HUSKY: 0
 
     strategy:
       fail-fast: false
@@ -110,7 +111,6 @@ jobs:
       TURBO_TEAM: ${{ vars.TURBO_TEAM }}
       TEST_DATABASE_URL: postgresql://test:test@localhost:5433/tracearr_test
       TEST_REDIS_URL: redis://localhost:6380
-      HUSKY: 0
 
     services:
       timescale:
@@ -179,7 +179,6 @@ jobs:
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
       TURBO_TEAM: ${{ vars.TURBO_TEAM }}
-      HUSKY: 0
 
     steps:
       - name: Checkout
@@ -238,7 +237,6 @@ jobs:
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
       TURBO_TEAM: ${{ vars.TURBO_TEAM }}
-      HUSKY: 0
 
     steps:
       - name: Checkout
