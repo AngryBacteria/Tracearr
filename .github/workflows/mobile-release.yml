@@ -1,8 +1,5 @@
 name: Mobile Release
 
-env:
-  HUSKY: 0 # Disable husky hooks in CI environment
-
 on:
   workflow_dispatch:
     inputs:
@@ -109,6 +106,8 @@ jobs:
     defaults:
       run:
         working-directory: apps/mobile
+    env:
+      HUSKY: 0
 
     steps:
       - name: Checkout
@@ -210,6 +209,8 @@ jobs:
     defaults:
       run:
         working-directory: apps/mobile
+    env:
+      HUSKY: 0
 
     steps:
       - name: Checkout
