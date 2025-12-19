@@ -48,6 +48,13 @@ export interface CacheService {
   invalidateCache(key: string): Promise<void>;
   invalidatePattern(pattern: string): Promise<void>;
 
+  // Session creation lock (prevents SSE/Poller race condition)
+  withSessionCreateLock<T>(
+    serverId: string,
+    sessionKey: string,
+    operation: () => Promise<T>
+  ): Promise<T | null>;
+
   // Health check
   ping(): Promise<boolean>;
 }
@@ -350,6 +357,26 @@ export function createCacheService(redis: Redis): CacheService {
       }
     },
 
+    async withSessionCreateLock<T>(
+      serverId: string,
+      sessionKey: string,
+      operation: () => Promise<T>
+    ): Promise<T | null> {
+      const lockKey = `session:lock:${serverId}:${sessionKey}`;
+
+      // NX = only set if not exists, 5s TTL
+      const lockAcquired = await redis.set(lockKey, '1', 'EX', 5, 'NX');
+      if (!lockAcquired) {
+        return null;
+      }
+
+      try {
+        return await operation();
+      } finally {
+        await redis.del(lockKey);
+      }
+    },
+
     // Health check
     async ping(): Promise<boolean> {
       try {
@@ -540,3 +567,4 @@ export async function atomicMultiUpdate(
 
   await pipeline.exec();
 }
+
