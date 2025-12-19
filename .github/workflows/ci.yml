@@ -1,5 +1,8 @@
 name: CI
 
+env:
+  HUSKY: 0 # Disable husky hooks in CI environment
+
 on:
   push:
     branches: [main]

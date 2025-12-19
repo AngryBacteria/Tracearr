@@ -1,5 +1,8 @@
 name: Release
 
+env:
+  HUSKY: 0 # Disable husky hooks in CI environment
+
 on:
   push:
     tags:

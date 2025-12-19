@@ -1,5 +1,8 @@
 name: Nightly
 
+env:
+  HUSKY: 0 # Disable husky hooks in CI environment
+
 on:
   schedule:
     # Run at 4am UTC daily
