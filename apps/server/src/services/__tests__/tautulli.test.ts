@@ -653,7 +653,7 @@ describe('Field Mapping', () => {
   });
 
   describe('media_index type coercion', () => {
-    function convertMediaIndex(mediaIndex: number | ''): number | null {
+    function convertMediaIndex(mediaIndex: number | '' | null): number | null {
       return typeof mediaIndex === 'number' ? mediaIndex : null;
     }
 
@@ -795,7 +795,7 @@ describe('User Matching Logic', () => {
       } else {
         skippedUsers.set(record.user_id, {
           tautulliUserId: record.user_id,
-          username: record.friendly_name || record.user,
+          username: record.friendly_name || record.user || 'Unknown',
           count: 1,
         });
       }
