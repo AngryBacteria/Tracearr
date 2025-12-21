@@ -155,9 +155,10 @@ function getStreamDecisions(session: Record<string, unknown>): {
 }
 
 /**
- * Check if session is a trailer or preroll that should be filtered out
+ * Check if session is non-primary content that should be filtered out
+ * Filters: trailers, prerolls, theme songs, theme videos
  */
-function isTrailerOrPreroll(nowPlaying: Record<string, unknown>): boolean {
+function isNonPrimaryContent(nowPlaying: Record<string, unknown>): boolean {
   // Filter trailers
   const itemType = parseOptionalString(nowPlaying.Type);
   if (itemType?.toLowerCase() === 'trailer') return true;
@@ -165,6 +166,11 @@ function isTrailerOrPreroll(nowPlaying: Record<string, unknown>): boolean {
   // Filter preroll videos (check ProviderIds for prerolls.video)
   const providerIds = getNestedObject(nowPlaying, 'ProviderIds');
   if (providerIds && 'prerolls.video' in providerIds) return true;
+
+  // Filter theme songs and theme videos (Issue #72)
+  // ExtraType field identifies special content like themes, behind-the-scenes, etc.
+  const extraType = parseOptionalString(nowPlaying.ExtraType);
+  if (extraType === 'ThemeSong' || extraType === 'ThemeVideo') return true;
 
   return false;
 }
@@ -194,8 +200,8 @@ export function parseSession(session: Record<string, unknown>): MediaSession | n
   const nowPlaying = getNestedObject(session, 'NowPlayingItem');
   if (!nowPlaying) return null; // No active playback
 
-  // Filter out trailers and prerolls
-  if (isTrailerOrPreroll(nowPlaying)) return null;
+  // Filter out non-primary content (trailers, prerolls, theme songs/videos)
+  if (isNonPrimaryContent(nowPlaying)) return null;
 
   const playState = getNestedObject(session, 'PlayState');
   const imageTags = getNestedObject(nowPlaying, 'ImageTags');
