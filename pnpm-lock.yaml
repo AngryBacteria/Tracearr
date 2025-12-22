@@ -261,6 +261,9 @@ importers:
       bullmq:
         specifier: ^5.65.1
         version: 5.65.1
+      country-list:
+        specifier: ^2.4.1
+        version: 2.4.1
       dotenv:
         specifier: ^16.4.7
         version: 16.6.1
@@ -310,6 +313,9 @@ importers:
       '@types/bcrypt':
         specifier: ^5.0.2
         version: 5.0.2
+      '@types/country-list':
+        specifier: ^2.1.4
+        version: 2.1.4
       '@types/eventsource':
         specifier: ^3.0.0
         version: 3.0.0

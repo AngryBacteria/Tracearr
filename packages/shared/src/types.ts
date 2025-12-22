@@ -560,6 +560,7 @@ export interface ServerToClientEvents {
   'stats:updated': (stats: DashboardStats) => void;
   'import:progress': (progress: TautulliImportProgress) => void;
   'import:jellystat:progress': (progress: JellystatImportProgress) => void;
+  'maintenance:progress': (progress: MaintenanceJobProgress) => void;
   'version:update': (data: { current: string; latest: string; releaseUrl: string }) => void;
   'server:down': (data: { serverId: string; serverName: string }) => void;
   'server:up': (data: { serverId: string; serverName: string }) => void;
@@ -1016,6 +1017,38 @@ export interface PlexDiscoveredServer {
 export interface PlexAvailableServersResponse {
   servers: PlexDiscoveredServer[];
   hasPlexToken: boolean; // False if user has no Plex servers connected
+}
+
+// =============================================================================
+// Maintenance Job Types
+// =============================================================================
+
+export type MaintenanceJobType = 'normalize_players' | 'normalize_countries' | 'fix_imported_progress';
+
+export type MaintenanceJobStatus = 'idle' | 'running' | 'complete' | 'error';
+
+export interface MaintenanceJobProgress {
+  type: MaintenanceJobType;
+  status: MaintenanceJobStatus;
+  totalRecords: number;
+  processedRecords: number;
+  updatedRecords: number;
+  skippedRecords: number;
+  errorRecords: number;
+  message: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface MaintenanceJobResult {
+  success: boolean;
+  type: MaintenanceJobType;
+  processed: number;
+  updated: number;
+  skipped: number;
+  errors: number;
+  durationMs: number;
+  message: string;
 }
 
 // =============================================================================

@@ -600,7 +600,7 @@ export class TautulliService {
             externalSessionId: referenceIdStr,
             state: 'stopped',
             mediaType,
-            mediaTitle: record.full_title || record.title,
+            mediaTitle: record.title,
             grandparentTitle: record.grandparent_title || null,
             seasonNumber:
               typeof record.parent_media_index === 'number' ? record.parent_media_index : null,
@@ -611,8 +611,14 @@ export class TautulliService {
             lastSeenAt: startedAt,
             stoppedAt: new Date((record.started + record.duration) * 1000),
             durationMs: record.duration * 1000,
-            totalDurationMs: null,
-            progressMs: null,
+            // Calculate totalDurationMs from duration and percent_complete
+            // e.g., if 441s watched = 44%, total = 441/0.44 = 1002s
+            totalDurationMs:
+              record.percent_complete > 0
+                ? Math.round((record.duration * 1000 * 100) / record.percent_complete)
+                : null,
+            // For imported sessions, progressMs ≈ durationMs (assumes linear playback)
+            progressMs: record.duration * 1000,
             pausedDurationMs: record.paused_counter * 1000,
             watched: record.watched_status === 1,
             ipAddress: record.ip_address || '0.0.0.0',
