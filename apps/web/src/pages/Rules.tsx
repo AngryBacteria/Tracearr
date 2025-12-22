@@ -23,6 +23,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Plus, Pencil, Trash2, Shield, MapPin, Zap, Users, Globe } from 'lucide-react';
+import { CountryMultiSelect } from '@/components/ui/country-multi-select';
+import { getCountryName } from '@/lib/utils';
 import type { Rule, RuleType, RuleParams, UnitSystem } from '@tracearr/shared';
 import {
   getSpeedUnit,
@@ -88,7 +90,7 @@ interface RuleFormData {
   isActive: boolean;
 }
 
-// Separate component for geo restriction to handle local state for comma input
+// Separate component for geo restriction to handle country selection
 function GeoRestrictionInput({
   params,
   onChange,
@@ -99,18 +101,13 @@ function GeoRestrictionInput({
   // Handle backwards compatibility
   const mode = params.mode ?? 'blocklist';
   const countries = params.countries ?? params.blockedCountries ?? [];
-  const [inputValue, setInputValue] = useState(countries.join(', '));
-
-  const parseAndUpdate = (value: string) => {
-    const parsed = value
-      .split(',')
-      .map((c) => c.trim().toUpperCase())
-      .filter(Boolean);
-    onChange({ mode, countries: parsed });
-  };
 
   const handleModeChange = (newMode: 'blocklist' | 'allowlist') => {
     onChange({ mode: newMode, countries });
+  };
+
+  const handleCountriesChange = (newCountries: string[]) => {
+    onChange({ mode, countries: newCountries });
   };
 
   return (
@@ -131,27 +128,14 @@ function GeoRestrictionInput({
         </Select>
       </div>
       <div className="space-y-2">
-        <Label htmlFor="countries">
-          {mode === 'blocklist' ? 'Blocked' : 'Allowed'} Countries (comma-separated)
-        </Label>
-        <Input
-          id="countries"
-          value={inputValue}
-          onChange={(e) => setInputValue(e.target.value)}
-          onBlur={() => {
-            parseAndUpdate(inputValue);
-            // Normalize the display after blur
-            const normalized = inputValue
-              .split(',')
-              .map((c) => c.trim().toUpperCase())
-              .filter(Boolean);
-            setInputValue(normalized.join(', '));
-          }}
-          placeholder={mode === 'blocklist' ? 'CN, RU, ...' : 'US, CA, GB, ...'}
+        <Label>{mode === 'blocklist' ? 'Blocked' : 'Allowed'} Countries</Label>
+        <CountryMultiSelect
+          value={countries}
+          onChange={handleCountriesChange}
+          placeholder={mode === 'blocklist' ? 'Select countries to block...' : 'Select allowed countries...'}
         />
         <p className="text-muted-foreground text-xs">
-          ISO 3166-1 alpha-2 country codes separated by commas.
-          {mode === 'allowlist' && ' Streams from any other country will trigger a violation.'}
+          {mode === 'allowlist' && 'Streams from any other country will trigger a violation.'}
         </p>
       </div>
     </div>
@@ -477,10 +461,11 @@ function RuleCard({
                     };
                     const mode = p.mode ?? 'blocklist';
                     const countries = p.countries ?? p.blockedCountries ?? [];
+                    const countryNames = countries.map((c) => getCountryName(c) ?? c);
                     return (
                       <span>
                         {mode === 'allowlist' ? 'Allowed' : 'Blocked'}:{' '}
-                        {countries.join(', ') || 'None'}
+                        {countryNames.join(', ') || 'None'}
                       </span>
                     );
                   })()}

@@ -28,7 +28,7 @@ import {
   Clock,
   ExternalLink,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, getCountryName } from '@/lib/utils';
 import { getAvatarUrl } from '@/components/users/utils';
 import { useTheme } from '@/components/theme-provider';
 import type {
@@ -204,7 +204,11 @@ export function SessionDetailSheet({ session, open, onOpenChange }: Props) {
     : null;
 
   // Build location string
-  const locationParts = [session.geoCity, session.geoRegion, session.geoCountry].filter(Boolean);
+  const locationParts = [
+    session.geoCity,
+    session.geoRegion,
+    getCountryName(session.geoCountry),
+  ].filter(Boolean);
   const locationString = locationParts.join(', ');
 
   return (

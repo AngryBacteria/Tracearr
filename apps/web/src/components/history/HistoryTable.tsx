@@ -34,7 +34,7 @@ import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Skeleton } from '@/components/ui/skeleton';
-import { cn } from '@/lib/utils';
+import { cn, getCountryName } from '@/lib/utils';
 import { getAvatarUrl } from '@/components/users/utils';
 import type { SessionWithDetails, SessionState, MediaType } from '@tracearr/shared';
 import type { ColumnVisibility } from './HistoryFilters';
@@ -247,14 +247,16 @@ export const HistoryTableRow = forwardRef<
               <TooltipTrigger asChild>
                 <div className="flex items-center gap-1.5">
                   <Globe className="text-muted-foreground h-3.5 w-3.5" />
-                  <span className="truncate text-sm">{session.geoCity || session.geoCountry}</span>
+                  <span className="truncate text-sm">
+                    {session.geoCity || getCountryName(session.geoCountry)}
+                  </span>
                 </div>
               </TooltipTrigger>
               <TooltipContent>
                 <div className="space-y-1 text-xs">
                   {session.geoCity && <div>City: {session.geoCity}</div>}
                   {session.geoRegion && <div>Region: {session.geoRegion}</div>}
-                  {session.geoCountry && <div>Country: {session.geoCountry}</div>}
+                  {session.geoCountry && <div>Country: {getCountryName(session.geoCountry)}</div>}
                   {session.ipAddress && <div>IP: {session.ipAddress}</div>}
                 </div>
               </TooltipContent>
