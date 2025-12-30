@@ -1,33 +1,28 @@
-# Tracearr - Supervised All-in-One Deployment (Portainer/Proxmox Ready)
+# Tracearr - All-in-One Deployment
 #
-# This is the EASIEST way to deploy Tracearr!
+# Single container with TimescaleDB, Redis, and Tracearr bundled together.
+# Secrets are auto-generated on first run — no configuration required.
 #
-# The supervised image includes everything in a single container:
-# - TimescaleDB with Toolkit extension
-# - Redis
-# - Tracearr application
+# REQUIREMENTS:
+#   - Minimum 2GB RAM (container runs PostgreSQL + Redis + Node.js)
+#   - Containers with less memory will crash with exit code 137 (OOM killed)
 #
-# Secrets are AUTO-GENERATED on first run - no configuration required!
+# DEPLOY:
+#   docker compose -f docker-compose.supervised-example.yml up -d
 #
-# SETUP:
-# 1. Copy this file to your deployment location
-# 2. Deploy via Portainer Stack or: docker compose -f docker-compose.supervised-example.yml up -d
-# 3. Access Tracearr at http://your-server:3000
-#
-# That's it! No .env file needed for basic setup.
+# Then open http://your-server:3000
 #
 # OPTIONAL ENVIRONMENT VARIABLES:
 #   PORT=3000              # External port mapping
-#   TZ=UTC                 # Timezone (e.g., America/New_York, Europe/London)
+#   TZ=UTC                 # Timezone (e.g., America/New_York)
 #   LOG_LEVEL=info         # Log level (debug, info, warn, error)
-#   JWT_SECRET=xxx         # Override auto-generated JWT secret
-#   COOKIE_SECRET=xxx      # Override auto-generated cookie secret
 
 services:
   tracearr:
     image: ghcr.io/connorgallopo/tracearr:supervised
     container_name: tracearr
     shm_size: 256mb  # Required for PostgreSQL shared memory
+    mem_limit: 2g    # Minimum 2GB required (PostgreSQL + Redis + Node.js)
     ports:
       - "${PORT:-3000}:3000"
     environment:

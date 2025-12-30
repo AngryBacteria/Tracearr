@@ -305,6 +305,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}},enable=${{ needs.check-release-type.outputs.prerelease == 'false' }}
             type=semver,pattern={{major}},enable=${{ needs.check-release-type.outputs.prerelease == 'false' }}
+            type=raw,value=latest,enable=${{ needs.check-release-type.outputs.prerelease == 'false' }}
             type=raw,value=next,enable=${{ needs.check-release-type.outputs.prerelease == 'true' }}
 
       - name: Create manifest list and push
@@ -436,8 +437,10 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           # Use flavor prefix for reliable tag prefixing
+          # latest=false prevents supervised from overwriting the :latest tag
           flavor: |
             prefix=supervised-,onlatest=false
+            latest=false
           tags: |
             type=semver,pattern={{version}}
             type=raw,value=supervised,enable=${{ needs.check-release-type.outputs.prerelease == 'false' }},prefix=

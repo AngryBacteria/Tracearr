@@ -100,24 +100,27 @@ async function syncPlexUsers(
 }
 
 /**
- * Sync users from Jellyfin server to local database
+ * Sync users from Jellyfin or Emby server to local database
+ * Both use the same IMediaServerClient interface via createMediaServerClient
  */
-async function syncJellyfinUsers(
+async function syncMediaServerUsers(
   serverId: string,
+  serverType: 'jellyfin' | 'emby',
   serverUrl: string,
-  encryptedToken: string
+  token: string
 ): Promise<{ added: number; updated: number; errors: string[] }> {
+  const serverName = serverType.charAt(0).toUpperCase() + serverType.slice(1);
   try {
     const client = createMediaServerClient({
-      type: 'jellyfin',
+      type: serverType,
       url: serverUrl,
-      token: encryptedToken,
+      token,
     });
-    const jellyfinUsers = await client.getUsers();
-    return syncServerUsers(serverId, jellyfinUsers);
+    const users = await client.getUsers();
+    return syncServerUsers(serverId, users);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    return { added: 0, updated: 0, errors: [`Jellyfin user sync failed: ${message}`] };
+    return { added: 0, updated: 0, errors: [`${serverName} user sync failed: ${message}`] };
   }
 }
 
@@ -154,9 +157,8 @@ export async function syncServer(
       result.usersAdded = userResult.added;
       result.usersUpdated = userResult.updated;
       result.errors.push(...userResult.errors);
-    } else if (server.type === 'jellyfin') {
-      // Pass encrypted token - JellyfinService will decrypt
-      const userResult = await syncJellyfinUsers(serverId, serverUrl, server.token);
+    } else if (server.type === 'jellyfin' || server.type === 'emby') {
+      const userResult = await syncMediaServerUsers(serverId, server.type, serverUrl, server.token);
       result.usersAdded = userResult.added;
       result.usersUpdated = userResult.updated;
       result.errors.push(...userResult.errors);

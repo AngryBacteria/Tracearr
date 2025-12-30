@@ -13,14 +13,101 @@ import type {
   GeoRestrictionParams,
 } from '@tracearr/shared';
 import { GEOIP_CONFIG, TIME_MS } from '@tracearr/shared';
+import { geoipService } from './geoip.js';
+import countries from 'i18n-iso-countries';
+import countriesEn from 'i18n-iso-countries/langs/en.json' with { type: 'json' };
+
+// Register English locale for country name lookups
+countries.registerLocale(countriesEn);
+
+/** Constant for local network country value - must match geoip service */
+const LOCAL_NETWORK_COUNTRY = 'Local Network';
+
+/**
+ * Normalize a country value to ISO 3166-1 alpha-2 code.
+ * Handles both country names ("Italy") and codes ("IT").
+ * Returns null if the country cannot be normalized.
+ */
+function normalizeToCountryCode(country: string): string | null {
+  if (!country || country === LOCAL_NETWORK_COUNTRY) {
+    return null;
+  }
+
+  // If it's already a 2-letter code, validate and return uppercase
+  if (country.length === 2) {
+    const upper = country.toUpperCase();
+    // Verify it's a valid country code
+    if (countries.getName(upper, 'en')) {
+      return upper;
+    }
+  }
+
+  // Try to convert country name to code
+  const code = countries.getAlpha2Code(country, 'en');
+  if (code) {
+    return code;
+  }
+
+  // Fallback: return the original value uppercase (might be a valid code)
+  return country.length === 2 ? country.toUpperCase() : null;
+}
 
 export interface RuleEvaluationResult {
   violated: boolean;
   severity: ViolationSeverity;
   data: Record<string, unknown>;
+  /** Issue #67: Include the rule that produced this result for correct violation attribution */
+  rule?: Rule;
 }
 
 export class RuleEngine {
+  /**
+   * Check if a session is from a local/private network
+   * Checks both geoCountry AND IP address for robustness
+   */
+  private isLocalNetworkSession(session: Session): boolean {
+    return (
+      session.geoCountry === LOCAL_NETWORK_COUNTRY || geoipService.isPrivateIP(session.ipAddress)
+    );
+  }
+
+  /**
+   * Check if a session should be excluded based on private IP filtering
+   * @param session The session to check
+   * @param excludePrivateIps Whether to exclude private IPs
+   * @returns true if the session should be excluded (is from local network and filtering is enabled)
+   */
+  private shouldExcludeSession(session: Session, excludePrivateIps?: boolean): boolean {
+    return excludePrivateIps === true && this.isLocalNetworkSession(session);
+  }
+
+  /**
+   * Filter sessions based on private IP exclusion setting
+   * @param sessions Sessions to filter
+   * @param excludePrivateIps Whether to exclude private IPs
+   * @returns Filtered sessions (excluding local network sessions if enabled)
+   */
+  private filterByPrivateIp(sessions: Session[], excludePrivateIps?: boolean): Session[] {
+    if (!excludePrivateIps) {
+      return sessions;
+    }
+    return sessions.filter((s) => !this.isLocalNetworkSession(s));
+  }
+
+  /**
+   * Filter IP addresses based on private IP exclusion setting
+   * Uses geoipService.isPrivateIP for raw IP strings (device_velocity)
+   * @param ips IP addresses to filter
+   * @param excludePrivateIps Whether to exclude private IPs
+   * @returns Filtered IPs (excluding private IPs if enabled)
+   */
+  private filterPrivateIps(ips: string[], excludePrivateIps?: boolean): string[] {
+    if (!excludePrivateIps) {
+      return ips;
+    }
+    return ips.filter((ip) => !geoipService.isPrivateIP(ip));
+  }
+
   /**
    * Evaluate all active rules against a new session
    */
@@ -39,7 +126,8 @@ export class RuleEngine {
 
       const result = await this.evaluateRule(rule, session, recentSessions);
       if (result.violated) {
-        results.push(result);
+        // Issue #67: Include the rule that produced this result for correct violation attribution
+        results.push({ ...result, rule });
       }
     }
 
@@ -88,14 +176,21 @@ export class RuleEngine {
     recentSessions: Session[],
     params: ImpossibleTravelParams
   ): RuleEvaluationResult {
+    // Issue #82: Skip if current session is from private IP and excludePrivateIps is enabled
+    if (this.shouldExcludeSession(session, params.excludePrivateIps)) {
+      return { violated: false, severity: 'low', data: {} };
+    }
+
     // Find most recent session from same server user with different location
-    const userSessions = recentSessions.filter(
+    const userSessions = this.filterByPrivateIp(recentSessions, params.excludePrivateIps).filter(
       (s) =>
         s.serverUserId === session.serverUserId &&
         s.geoLat !== null &&
         s.geoLon !== null &&
         session.geoLat !== null &&
-        session.geoLon !== null
+        session.geoLon !== null &&
+        // Issue #67: Exclude same device - VPN switches on same device are not impossible travel
+        !(session.deviceId && s.deviceId && session.deviceId === s.deviceId)
     );
 
     for (const prevSession of userSessions) {
@@ -136,11 +231,18 @@ export class RuleEngine {
     recentSessions: Session[],
     params: SimultaneousLocationsParams
   ): RuleEvaluationResult {
+    // Issue #82: Skip if current session is from private IP and excludePrivateIps is enabled
+    if (this.shouldExcludeSession(session, params.excludePrivateIps)) {
+      return { violated: false, severity: 'low', data: {} };
+    }
+
     // Check for active sessions from same server user at different locations
-    const activeSessions = recentSessions.filter(
+    const activeSessions = this.filterByPrivateIp(recentSessions, params.excludePrivateIps).filter(
       (s) =>
         s.serverUserId === session.serverUserId &&
         s.state === 'playing' &&
+        // Issue #67: Exclude stopped sessions (stoppedAt takes precedence over state)
+        s.stoppedAt === null &&
         s.geoLat !== null &&
         s.geoLon !== null &&
         session.geoLat !== null &&
@@ -208,18 +310,47 @@ export class RuleEngine {
       (s) => s.serverUserId === session.serverUserId && s.startedAt >= windowStart
     );
 
-    const uniqueIps = new Set(userSessions.map((s) => s.ipAddress));
-    uniqueIps.add(session.ipAddress);
+    const allSessions = [...userSessions];
+    if (!this.shouldExcludeSession(session, params.excludePrivateIps)) {
+      allSessions.push(session);
+    }
 
-    if (uniqueIps.size > params.maxIps) {
+    let uniqueSources: Set<string>;
+    const uniqueIps = new Set<string>();
+
+    if (params.groupByDevice) {
+      // Group by deviceId - each device counts as 1 source regardless of IP changes
+      uniqueSources = new Set<string>();
+
+      for (const s of allSessions) {
+        if (params.excludePrivateIps && geoipService.isPrivateIP(s.ipAddress)) {
+          continue;
+        }
+
+        const sourceKey = s.deviceId ?? `ip:${s.ipAddress}`;
+        uniqueSources.add(sourceKey);
+        uniqueIps.add(s.ipAddress);
+      }
+    } else {
+      const allIps = allSessions.map((s) => s.ipAddress);
+      const filteredIps = this.filterPrivateIps(allIps, params.excludePrivateIps);
+
+      for (const ip of filteredIps) {
+        uniqueIps.add(ip);
+      }
+      uniqueSources = uniqueIps;
+    }
+
+    if (uniqueSources.size > params.maxIps) {
       return {
         violated: true,
         severity: 'warning',
         data: {
-          uniqueIpCount: uniqueIps.size,
+          uniqueIpCount: uniqueSources.size,
           maxAllowedIps: params.maxIps,
           windowHours: params.windowHours,
           ips: Array.from(uniqueIps),
+          ...(params.groupByDevice && { groupedByDevice: true }),
         },
       };
     }
@@ -232,17 +363,24 @@ export class RuleEngine {
     recentSessions: Session[],
     params: ConcurrentStreamsParams
   ): RuleEvaluationResult {
-    const activeSessions = recentSessions.filter(
+    // Issue #82: Filter out private IP sessions if excludePrivateIps is enabled
+    const filteredSessions = this.filterByPrivateIp(recentSessions, params.excludePrivateIps);
+
+    const activeSessions = filteredSessions.filter(
       (s) =>
         s.serverUserId === session.serverUserId &&
         s.state === 'playing' &&
+        // Issue #67: Exclude stopped sessions (stoppedAt takes precedence over state)
+        // This handles stale snapshot bug where state='playing' but session was stopped
+        s.stoppedAt === null &&
         // Exclude sessions from the same device (likely reconnects/stale sessions)
         // A single device can only play one stream at a time
         !(session.deviceId && s.deviceId && session.deviceId === s.deviceId)
     );
 
-    // Add 1 for current session
-    const totalStreams = activeSessions.length + 1;
+    // Add 1 for current session only if it's not excluded
+    const currentSessionExcluded = this.shouldExcludeSession(session, params.excludePrivateIps);
+    const totalStreams = activeSessions.length + (currentSessionExcluded ? 0 : 1);
 
     if (totalStreams > params.maxStreams) {
       // Collect all session IDs for deduplication and related sessions lookup
@@ -268,16 +406,37 @@ export class RuleEngine {
   ): RuleEvaluationResult {
     // Handle backwards compatibility: old rules have blockedCountries, new rules have mode + countries
     const mode = params.mode ?? 'blocklist';
-    const countries =
+    const ruleCountries =
       params.countries ??
       (params as unknown as { blockedCountries?: string[] }).blockedCountries ??
       [];
 
-    if (!session.geoCountry || countries.length === 0) {
+    // Skip local/private IPs - they have no meaningful geo location
+    if (
+      !session.geoCountry ||
+      session.geoCountry === LOCAL_NETWORK_COUNTRY ||
+      ruleCountries.length === 0
+    ) {
       return { violated: false, severity: 'low', data: {} };
     }
 
-    const isInList = countries.includes(session.geoCountry);
+    // Normalize session's country to ISO code for consistent comparison
+    // Session might have full name ("Italy") or code ("IT")
+    // Rule list should have codes, but normalize both for safety
+    const sessionCountryCode = normalizeToCountryCode(session.geoCountry);
+
+    // If we can't normalize the session's country, skip the check
+    // (better to allow than to incorrectly block)
+    if (!sessionCountryCode) {
+      return { violated: false, severity: 'low', data: {} };
+    }
+
+    // Normalize the rule's country list (should be codes, but handle names too)
+    const normalizedRuleCountries = ruleCountries
+      .map((c) => normalizeToCountryCode(c))
+      .filter((c): c is string => c !== null);
+
+    const isInList = normalizedRuleCountries.includes(sessionCountryCode);
     const violated = mode === 'blocklist' ? isInList : !isInList;
 
     if (violated) {
@@ -286,8 +445,9 @@ export class RuleEngine {
         severity: 'high',
         data: {
           country: session.geoCountry,
+          countryCode: sessionCountryCode,
           mode,
-          countries,
+          countries: ruleCountries,
         },
       };
     }

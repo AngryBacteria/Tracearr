@@ -35,11 +35,11 @@ Unlike monitoring tools that just show you data, Tracearr is built to detect acc
 
 **Real-Time Alerts** — Discord webhooks and custom notifications fire instantly when rules trigger. No waiting for daily reports.
 
-**Stream Map** — Visualize where your streams originate on an interactive world map. Filter by user, server, or time period to zero in on suspicious patterns.
+**Stream Map** — Visualize where your streams originate on a world map. Filter by user, server, or time period to zero in on suspicious patterns.
 
 **Trust Scores** — Users earn (or lose) trust based on their behavior. Violations drop scores automatically.
 
-**Multi-Server** — Connect Plex, Jellyfin, and Emby instances to the same dashboard. Manage everything in one place.
+**Multi-Server** — Connect Plex, Jellyfin, and Emby instances to the same dashboard.
 
 **Tautulli Import** — Already using Tautulli? Import your watch history so you don't start from scratch.
 
@@ -66,31 +66,19 @@ Tracearr v1 is focused on **detection and alerting**. Automated enforcement—ki
 | IP geolocation            | ✅       | ✅        | ✅       |
 | Import from Tautulli      | —        | ❌        | ✅       |
 
-Tautulli and Jellystat are platform-locked equivalents—Plex-only vs Jellyfin/Emby-only. If you just want stats, they work fine. If you're tired of your brother's roommate's cousin streaming on your dime, that's what Tracearr is for.
+Tautulli is Plex-only. Jellystat is Jellyfin/Emby-only. If you just want stats, they work fine. If you're tired of your brother's roommate's cousin streaming on your dime, that's what Tracearr is for.
 
 ## Quick Start
 
-### Option 1: All-in-One (Recommended)
-
-The supervised image bundles TimescaleDB, Redis, and Tracearr in a single container. No external database required. Secrets are auto-generated on first run.
+The supervised image bundles TimescaleDB, Redis, and Tracearr in a single container. Requires 2GB+ RAM. Secrets are auto-generated on first run.
 
 ```bash
-docker compose -f docker/docker-compose.supervised.yml up -d
+docker compose -f docker/examples/docker-compose.supervised-example.yml up -d
 ```
 
 Open `http://localhost:3000` and connect your Plex, Jellyfin, or Emby server.
 
-### Option 2: Separate Services
-
-If you already have TimescaleDB/PostgreSQL and Redis, or prefer managing services separately:
-
-```bash
-# Copy and configure environment
-cp docker/.env.example docker/.env
-# Edit docker/.env with your secrets (generate with: openssl rand -hex 32)
-
-docker compose -f docker/docker-compose.yml up -d
-```
+For separate services, Portainer deployment, or detailed requirements, see the [Docker deployment guide](docker/examples/README.md).
 
 ### Docker Tags
 
@@ -113,10 +101,6 @@ docker pull ghcr.io/connorgallopo/tracearr:latest
 # Living on the edge
 docker pull ghcr.io/connorgallopo/tracearr:nightly
 ```
-
-### Portainer / Proxmox
-
-For one-click deployment via Portainer or Proxmox, see the ready-to-use compose files in [`docker/examples/`](docker/examples/). These use pre-built images only—no build context required.
 
 ### Development Setup
 
@@ -154,7 +138,7 @@ Frontend runs at `localhost:5173`, API at `localhost:3000`.
 
 **TimescaleDB** handles session history. Regular Postgres works fine until you have a year of watch data and your stats queries start taking forever. TimescaleDB is built for exactly this kind of time-series data—dashboard stats stay fast because they're pre-computed, not recalculated every page load.
 
-**Fastify** over Express because it's measurably faster and the schema validation is nice.
+**Fastify** over Express because it's measurably faster and schema validation catches bad requests before they hit handlers.
 
 **Plex SSE** — Plex servers stream session updates in real-time via Server-Sent Events. No polling delay, instant detection. Jellyfin and Emby still use polling (they don't support SSE), but Plex sessions appear the moment they start.
 
@@ -212,6 +196,12 @@ Contributions welcome. Please:
 5. Open a PR
 
 Check the [issues](https://github.com/connorgallopo/Tracearr/issues) for things to work on.
+
+### Development with VS Code
+
+Use the included `.vscode/launch.json` to debug both server and web apps directly from VS Code.
+
+Run `pnpm dev` in a terminal to start both apps, then use the "Debug All" configuration to attach the debugger.
 
 ## Roadmap
 

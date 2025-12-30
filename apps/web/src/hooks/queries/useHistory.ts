@@ -12,22 +12,22 @@ import { api } from '@/lib/api';
  * Omits cursor and pageSize as those are handled by infinite query.
  */
 export interface HistoryFilters {
-  serverUserId?: string;
+  serverUserIds?: string[];
   serverId?: string;
   state?: 'playing' | 'paused' | 'stopped';
-  mediaType?: 'movie' | 'episode' | 'track';
+  mediaTypes?: ('movie' | 'episode' | 'track')[];
   startDate?: Date;
   endDate?: Date;
   search?: string;
-  platform?: string;
+  platforms?: string[];
   product?: string;
   device?: string;
   playerName?: string;
   ipAddress?: string;
-  geoCountry?: string;
+  geoCountries?: string[];
   geoCity?: string;
   geoRegion?: string;
-  isTranscode?: boolean;
+  transcodeDecisions?: ('directplay' | 'copy' | 'transcode')[];
   watched?: boolean;
   excludeShortSessions?: boolean;
   orderBy?: 'startedAt' | 'durationMs' | 'mediaTitle';
@@ -58,11 +58,18 @@ export function useHistorySessions(filters: HistoryFilters = {}, pageSize = 50) 
 /**
  * Query for filter options (platforms, products, devices, countries, etc.).
  * Used to populate filter dropdowns.
+ * Accepts optional date range to match the current history filter.
  */
-export function useFilterOptions(serverId?: string) {
+export function useFilterOptions(params?: { serverId?: string; startDate?: Date; endDate?: Date }) {
   return useQuery({
-    queryKey: ['sessions', 'filter-options', serverId],
-    queryFn: () => api.sessions.filterOptions(serverId),
+    queryKey: [
+      'sessions',
+      'filter-options',
+      params?.serverId,
+      params?.startDate?.toISOString(),
+      params?.endDate?.toISOString(),
+    ],
+    queryFn: () => api.sessions.filterOptions(params),
     staleTime: 1000 * 60 * 5, // 5 minutes - filter options don't change often
   });
 }

@@ -17,7 +17,6 @@ import {
   Globe,
   Monitor,
   ChevronDown,
-  Check,
   Columns3,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -33,14 +32,11 @@ import {
   DropdownMenuSub,
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuItem,
 } from '@/components/ui/dropdown-menu';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { TimeRangePicker, type TimeRangeValue } from '@/components/ui/time-range-picker';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { cn } from '@/lib/utils';
 import type { HistoryFilters } from '@/hooks/queries/useHistory';
 import type { HistoryFilterOptions } from '@tracearr/shared';
 
@@ -51,6 +47,7 @@ export const HISTORY_COLUMNS = [
   { id: 'content', label: 'Content', defaultVisible: true },
   { id: 'platform', label: 'Platform', defaultVisible: true },
   { id: 'location', label: 'Location', defaultVisible: true },
+  { id: 'ip', label: 'IP Address', defaultVisible: false },
   { id: 'quality', label: 'Quality', defaultVisible: true },
   { id: 'duration', label: 'Duration', defaultVisible: true },
   { id: 'progress', label: 'Progress', defaultVisible: true },
@@ -179,12 +176,15 @@ export function HistoryFiltersBar({
   const handleTimeRangeChange = useCallback(
     (newTimeRange: TimeRangeValue) => {
       const dateFilters = timeRangeToDateFilters(newTimeRange);
-      onFiltersChange({ ...filters, ...dateFilters });
+      onFiltersChange({
+        ...filters,
+        startDate: dateFilters.startDate,
+        endDate: dateFilters.endDate,
+      });
     },
     [filters, onFiltersChange]
   );
 
-  // Build active filters list
   const activeFilters = useMemo(() => {
     const active: {
       key: keyof HistoryFilters;
@@ -193,36 +193,65 @@ export function HistoryFiltersBar({
       icon?: typeof User;
     }[] = [];
 
-    if (filters.serverUserId) {
-      const user = filterOptions?.users?.find((u) => u.id === filters.serverUserId);
+    if (filters.serverUserIds?.length) {
+      const userNames = filters.serverUserIds.map((id) => {
+        const user = filterOptions?.users?.find((u) => u.id === id);
+        return user?.identityName || user?.username || 'Unknown';
+      });
       active.push({
-        key: 'serverUserId',
-        label: 'User',
-        value: user?.identityName || user?.username || 'Unknown',
+        key: 'serverUserIds',
+        label: 'Users',
+        value: userNames.length > 2 ? `${userNames.length} selected` : userNames.join(', '),
         icon: User,
       });
     }
-    if (filters.platform) {
-      active.push({ key: 'platform', label: 'Platform', value: filters.platform, icon: Monitor });
-    }
-    if (filters.geoCountry) {
-      active.push({ key: 'geoCountry', label: 'Country', value: filters.geoCountry, icon: Globe });
-    }
-    if (filters.mediaType) {
-      const labels = { movie: 'Movies', episode: 'TV Shows', track: 'Music' };
+    if (filters.platforms?.length) {
       active.push({
-        key: 'mediaType',
-        label: 'Type',
-        value: labels[filters.mediaType],
+        key: 'platforms',
+        label: 'Platforms',
+        value:
+          filters.platforms.length > 2
+            ? `${filters.platforms.length} selected`
+            : filters.platforms.join(', '),
+        icon: Monitor,
+      });
+    }
+    if (filters.geoCountries?.length) {
+      active.push({
+        key: 'geoCountries',
+        label: 'Countries',
+        value:
+          filters.geoCountries.length > 2
+            ? `${filters.geoCountries.length} selected`
+            : filters.geoCountries.join(', '),
+        icon: Globe,
+      });
+    }
+    if (filters.mediaTypes?.length) {
+      const labels = { movie: 'Movies', episode: 'TV Shows', track: 'Music' };
+      const typeLabels = filters.mediaTypes.map((t) => labels[t]);
+      active.push({
+        key: 'mediaTypes',
+        label: 'Types',
+        value: typeLabels.length > 2 ? `${typeLabels.length} selected` : typeLabels.join(', '),
         icon: Film,
       });
     }
-    if (filters.isTranscode !== undefined) {
+    if (filters.transcodeDecisions?.length) {
+      const labels = {
+        directplay: 'Direct Play',
+        copy: 'Direct Stream',
+        transcode: 'Transcode',
+      };
+      const decisionLabels = filters.transcodeDecisions.map((d) => labels[d]);
       active.push({
-        key: 'isTranscode',
+        key: 'transcodeDecisions',
         label: 'Quality',
-        value: filters.isTranscode ? 'Transcode' : 'Direct',
-        icon: filters.isTranscode ? Repeat2 : MonitorPlay,
+        value:
+          decisionLabels.length > 2
+            ? `${decisionLabels.length} selected`
+            : decisionLabels.join(', '),
+        icon: filters.transcodeDecisions.includes('transcode') ? Repeat2 : MonitorPlay,
       });
     }
 
@@ -322,113 +351,165 @@ export function HistoryFiltersBar({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
-            {/* User filter */}
+            {/* User filter - multi-select */}
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
                 <User className="mr-2 h-4 w-4" />
-                User
-                {filters.serverUserId && <Check className="ml-auto h-4 w-4" />}
+                Users
+                {filters.serverUserIds?.length ? (
+                  <Badge variant="secondary" className="ml-auto h-5 px-1.5 text-[10px]">
+                    {filters.serverUserIds.length}
+                  </Badge>
+                ) : null}
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent className="p-0">
-                <ScrollArea className="h-[200px]">
+                <ScrollArea className="h-[250px]">
                   <div className="p-1">
-                    <DropdownMenuItem
-                      onClick={() => removeFilter('serverUserId')}
-                      className={cn(!filters.serverUserId && 'hidden')}
-                    >
-                      <X className="mr-2 h-4 w-4" />
-                      Clear user filter
-                    </DropdownMenuItem>
-                    {filters.serverUserId && <DropdownMenuSeparator />}
-                    {sortedUsers.map((user) => (
-                      <DropdownMenuItem
-                        key={user.id}
-                        onClick={() => onFiltersChange({ ...filters, serverUserId: user.id })}
-                      >
-                        <Avatar className="mr-2 h-5 w-5">
-                          <AvatarImage src={user.thumbUrl ?? undefined} />
-                          <AvatarFallback className="text-[8px]">
-                            {user.username?.[0]?.toUpperCase() ?? '?'}
-                          </AvatarFallback>
-                        </Avatar>
-                        <span className="flex-1 truncate">
-                          {user.identityName || user.username}
-                        </span>
-                        {filters.serverUserId === user.id && <Check className="ml-2 h-4 w-4" />}
-                      </DropdownMenuItem>
-                    ))}
+                    {filters.serverUserIds?.length ? (
+                      <>
+                        <DropdownMenuItem onClick={() => removeFilter('serverUserIds')}>
+                          <X className="mr-2 h-4 w-4" />
+                          Clear all users
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                      </>
+                    ) : null}
+                    {sortedUsers.map((user) => {
+                      const isSelected = filters.serverUserIds?.includes(user.id) ?? false;
+                      return (
+                        <DropdownMenuCheckboxItem
+                          key={user.id}
+                          checked={isSelected}
+                          onCheckedChange={(checked) => {
+                            const current = filters.serverUserIds ?? [];
+                            const updated = checked
+                              ? [...current, user.id]
+                              : current.filter((id) => id !== user.id);
+                            onFiltersChange({
+                              ...filters,
+                              serverUserIds: updated.length > 0 ? updated : undefined,
+                            });
+                          }}
+                          onSelect={(e) => e.preventDefault()}
+                        >
+                          <Avatar className="mr-2 h-5 w-5">
+                            <AvatarImage src={user.thumbUrl ?? undefined} />
+                            <AvatarFallback className="text-[8px]">
+                              {user.username?.[0]?.toUpperCase() ?? '?'}
+                            </AvatarFallback>
+                          </Avatar>
+                          <span className="truncate">{user.identityName || user.username}</span>
+                        </DropdownMenuCheckboxItem>
+                      );
+                    })}
                   </div>
                 </ScrollArea>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
 
-            {/* Platform filter */}
+            {/* Platform filter - multi-select */}
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
                 <Monitor className="mr-2 h-4 w-4" />
-                Platform
-                {filters.platform && <Check className="ml-auto h-4 w-4" />}
+                Platforms
+                {filters.platforms?.length ? (
+                  <Badge variant="secondary" className="ml-auto h-5 px-1.5 text-[10px]">
+                    {filters.platforms.length}
+                  </Badge>
+                ) : null}
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent className="p-0">
-                <ScrollArea className="h-[200px]">
+                <ScrollArea className="h-[250px]">
                   <div className="p-1">
-                    <DropdownMenuItem
-                      onClick={() => removeFilter('platform')}
-                      className={cn(!filters.platform && 'hidden')}
-                    >
-                      <X className="mr-2 h-4 w-4" />
-                      Clear platform filter
-                    </DropdownMenuItem>
-                    {filters.platform && <DropdownMenuSeparator />}
-                    {filterOptions?.platforms?.map((opt) => (
-                      <DropdownMenuItem
-                        key={opt.value}
-                        onClick={() => onFiltersChange({ ...filters, platform: opt.value })}
-                      >
-                        <Monitor className="text-muted-foreground mr-2 h-4 w-4" />
-                        <span className="flex-1 truncate">{opt.value}</span>
-                        <Badge variant="secondary" className="ml-2 text-[10px]">
-                          {opt.count}
-                        </Badge>
-                        {filters.platform === opt.value && <Check className="ml-1 h-4 w-4" />}
-                      </DropdownMenuItem>
-                    ))}
+                    {filters.platforms?.length ? (
+                      <>
+                        <DropdownMenuItem onClick={() => removeFilter('platforms')}>
+                          <X className="mr-2 h-4 w-4" />
+                          Clear all platforms
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                      </>
+                    ) : null}
+                    {filterOptions?.platforms?.map((opt) => {
+                      const isSelected = filters.platforms?.includes(opt.value) ?? false;
+                      return (
+                        <DropdownMenuCheckboxItem
+                          key={opt.value}
+                          checked={isSelected}
+                          onCheckedChange={(checked) => {
+                            const current = filters.platforms ?? [];
+                            const updated = checked
+                              ? [...current, opt.value]
+                              : current.filter((p) => p !== opt.value);
+                            onFiltersChange({
+                              ...filters,
+                              platforms: updated.length > 0 ? updated : undefined,
+                            });
+                          }}
+                          onSelect={(e) => e.preventDefault()}
+                        >
+                          <Monitor className="text-muted-foreground mr-2 h-4 w-4" />
+                          <span className="flex-1 truncate">{opt.value}</span>
+                          <Badge variant="secondary" className="ml-2 text-[10px]">
+                            {opt.count}
+                          </Badge>
+                        </DropdownMenuCheckboxItem>
+                      );
+                    })}
                   </div>
                 </ScrollArea>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
 
-            {/* Country filter */}
+            {/* Country filter - multi-select */}
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
                 <Globe className="mr-2 h-4 w-4" />
-                Country
-                {filters.geoCountry && <Check className="ml-auto h-4 w-4" />}
+                Countries
+                {filters.geoCountries?.length ? (
+                  <Badge variant="secondary" className="ml-auto h-5 px-1.5 text-[10px]">
+                    {filters.geoCountries.length}
+                  </Badge>
+                ) : null}
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent className="p-0">
-                <ScrollArea className="h-[200px]">
+                <ScrollArea className="h-[250px]">
                   <div className="p-1">
-                    <DropdownMenuItem
-                      onClick={() => removeFilter('geoCountry')}
-                      className={cn(!filters.geoCountry && 'hidden')}
-                    >
-                      <X className="mr-2 h-4 w-4" />
-                      Clear country filter
-                    </DropdownMenuItem>
-                    {filters.geoCountry && <DropdownMenuSeparator />}
-                    {filterOptions?.countries?.map((opt) => (
-                      <DropdownMenuItem
-                        key={opt.value}
-                        onClick={() => onFiltersChange({ ...filters, geoCountry: opt.value })}
-                      >
-                        <Globe className="text-muted-foreground mr-2 h-4 w-4" />
-                        <span className="flex-1 truncate">{opt.value}</span>
-                        <Badge variant="secondary" className="ml-2 text-[10px]">
-                          {opt.count}
-                        </Badge>
-                        {filters.geoCountry === opt.value && <Check className="ml-1 h-4 w-4" />}
-                      </DropdownMenuItem>
-                    ))}
+                    {filters.geoCountries?.length ? (
+                      <>
+                        <DropdownMenuItem onClick={() => removeFilter('geoCountries')}>
+                          <X className="mr-2 h-4 w-4" />
+                          Clear all countries
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                      </>
+                    ) : null}
+                    {filterOptions?.countries?.map((opt) => {
+                      const isSelected = filters.geoCountries?.includes(opt.value) ?? false;
+                      return (
+                        <DropdownMenuCheckboxItem
+                          key={opt.value}
+                          checked={isSelected}
+                          onCheckedChange={(checked) => {
+                            const current = filters.geoCountries ?? [];
+                            const updated = checked
+                              ? [...current, opt.value]
+                              : current.filter((c) => c !== opt.value);
+                            onFiltersChange({
+                              ...filters,
+                              geoCountries: updated.length > 0 ? updated : undefined,
+                            });
+                          }}
+                          onSelect={(e) => e.preventDefault()}
+                        >
+                          <Globe className="text-muted-foreground mr-2 h-4 w-4" />
+                          <span className="flex-1 truncate">{opt.value}</span>
+                          <Badge variant="secondary" className="ml-2 text-[10px]">
+                            {opt.count}
+                          </Badge>
+                        </DropdownMenuCheckboxItem>
+                      );
+                    })}
                   </div>
                 </ScrollArea>
               </DropdownMenuSubContent>
@@ -436,66 +517,81 @@ export function HistoryFiltersBar({
 
             <DropdownMenuSeparator />
 
-            {/* Media Type - radio group */}
-            <DropdownMenuLabel>Media Type</DropdownMenuLabel>
-            <DropdownMenuRadioGroup
-              value={filters.mediaType ?? ''}
-              onValueChange={(value) => {
-                if (value === '') {
-                  removeFilter('mediaType');
-                } else {
-                  onFiltersChange({
-                    ...filters,
-                    mediaType: value as 'movie' | 'episode' | 'track',
-                  });
-                }
-              }}
-            >
-              <DropdownMenuRadioItem value="">All</DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="movie">
-                <Film className="mr-2 h-4 w-4" />
-                Movies
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="episode">
-                <Tv className="mr-2 h-4 w-4" />
-                TV Shows
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="track">
-                <Music className="mr-2 h-4 w-4" />
-                Music
-              </DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
+            {/* Media Type - multi-select checkboxes */}
+            <DropdownMenuLabel className="flex items-center justify-between">
+              Media Type
+              {filters.mediaTypes?.length ? (
+                <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+                  {filters.mediaTypes.length}
+                </Badge>
+              ) : null}
+            </DropdownMenuLabel>
+            {[
+              { value: 'movie' as const, label: 'Movies', icon: Film },
+              { value: 'episode' as const, label: 'TV Shows', icon: Tv },
+              { value: 'track' as const, label: 'Music', icon: Music },
+            ].map(({ value, label, icon: Icon }) => {
+              const isSelected = filters.mediaTypes?.includes(value) ?? false;
+              return (
+                <DropdownMenuCheckboxItem
+                  key={value}
+                  checked={isSelected}
+                  onCheckedChange={(checked) => {
+                    const current = filters.mediaTypes ?? [];
+                    const updated = checked
+                      ? [...current, value]
+                      : current.filter((t) => t !== value);
+                    onFiltersChange({
+                      ...filters,
+                      mediaTypes: updated.length > 0 ? updated : undefined,
+                    });
+                  }}
+                  onSelect={(e) => e.preventDefault()}
+                >
+                  <Icon className="mr-2 h-4 w-4" />
+                  {label}
+                </DropdownMenuCheckboxItem>
+              );
+            })}
 
             <DropdownMenuSeparator />
 
-            {/* Quality - radio group */}
-            <DropdownMenuLabel>Quality</DropdownMenuLabel>
-            <DropdownMenuRadioGroup
-              value={
-                filters.isTranscode === undefined
-                  ? ''
-                  : filters.isTranscode
-                    ? 'transcode'
-                    : 'direct'
-              }
-              onValueChange={(value) => {
-                if (value === '') {
-                  removeFilter('isTranscode');
-                } else {
-                  onFiltersChange({ ...filters, isTranscode: value === 'transcode' });
-                }
-              }}
-            >
-              <DropdownMenuRadioItem value="">All</DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="direct">
-                <MonitorPlay className="mr-2 h-4 w-4" />
-                Direct Play
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="transcode">
-                <Repeat2 className="mr-2 h-4 w-4" />
-                Transcode
-              </DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
+            {/* Quality - multi-select checkboxes */}
+            <DropdownMenuLabel className="flex items-center justify-between">
+              Quality
+              {filters.transcodeDecisions?.length ? (
+                <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+                  {filters.transcodeDecisions.length}
+                </Badge>
+              ) : null}
+            </DropdownMenuLabel>
+            {[
+              { value: 'directplay' as const, label: 'Direct Play', icon: MonitorPlay },
+              { value: 'copy' as const, label: 'Direct Stream', icon: MonitorPlay },
+              { value: 'transcode' as const, label: 'Transcode', icon: Repeat2 },
+            ].map(({ value, label, icon: Icon }) => {
+              const isSelected = filters.transcodeDecisions?.includes(value) ?? false;
+              return (
+                <DropdownMenuCheckboxItem
+                  key={value}
+                  checked={isSelected}
+                  onCheckedChange={(checked) => {
+                    const current = filters.transcodeDecisions ?? [];
+                    const updated = checked
+                      ? [...current, value]
+                      : current.filter((d) => d !== value);
+                    onFiltersChange({
+                      ...filters,
+                      transcodeDecisions: updated.length > 0 ? updated : undefined,
+                    });
+                  }}
+                  onSelect={(e) => e.preventDefault()}
+                >
+                  <Icon className="mr-2 h-4 w-4" />
+                  {label}
+                </DropdownMenuCheckboxItem>
+              );
+            })}
 
             {/* Clear all button */}
             {hasActiveFilters && (

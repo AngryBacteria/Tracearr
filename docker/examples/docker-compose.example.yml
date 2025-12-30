@@ -1,24 +1,24 @@
-# Tracearr - Standard Deployment (Portainer/Proxmox Ready)
+# Tracearr - Standard Deployment (Separate Services)
 #
-# This compose file runs Tracearr with separate database and cache services.
-# All images are pre-built - no build context required.
+# Multi-container setup with separate database and cache services.
+# Use this if you want more control or have existing infrastructure.
 #
-# SETUP:
-# 1. Copy this file to your deployment location
-# 2. Create a .env file with your secrets (see below)
-# 3. Deploy via Portainer Stack or: docker compose -f docker-compose.example.yml up -d
+# REQUIREMENTS:
+#   - ~1GB RAM for Tracearr container
+#   - Secrets must be generated manually (see below)
 #
-# REQUIRED ENVIRONMENT VARIABLES (.env file):
-#   JWT_SECRET=<random-32-char-string>
-#   COOKIE_SECRET=<random-32-char-string>
+# DEPLOY:
+#   # 1. Generate secrets
+#   echo "JWT_SECRET=$(openssl rand -hex 32)" > .env
+#   echo "COOKIE_SECRET=$(openssl rand -hex 32)" >> .env
 #
-# Generate secrets with: openssl rand -hex 32
+#   # 2. Start
+#   docker compose -f docker-compose.example.yml up -d
 #
 # OPTIONAL ENVIRONMENT VARIABLES:
 #   PORT=3000              # External port mapping
 #   TZ=America/New_York    # Timezone
 #   DB_PASSWORD=tracearr   # Database password
-#   CORS_ORIGIN=*          # CORS allowed origins
 #   LOG_LEVEL=info         # Log level (debug, info, warn, error)
 
 services:
@@ -72,7 +72,7 @@ services:
       - tracearr-network
 
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     container_name: tracearr-redis
     command: redis-server --appendonly yes
     volumes:

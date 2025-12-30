@@ -10,6 +10,14 @@ import type {
 } from '@tracearr/shared';
 import { NOTIFICATION_EVENTS, RULE_DISPLAY_NAMES, SEVERITY_LEVELS } from '@tracearr/shared';
 
+/** Fallback values when rule config doesn't specify */
+const VIOLATION_DEFAULTS = {
+  MAX_SPEED_KMH: 500,
+  MAX_STREAMS: 1,
+  MAX_IPS: 5,
+  WINDOW_HOURS: 24,
+} as const;
+
 export interface NotificationPayload {
   event: string;
   timestamp: string;
@@ -56,6 +64,28 @@ function severityToAppriseType(severity: string): 'info' | 'success' | 'warning'
 function truncateForDiscord(text: string, maxLength = 1000): string {
   if (text.length <= maxLength) return text;
   return text.substring(0, maxLength - 3) + '...';
+}
+
+/** Validate lat/lon are finite numbers within valid ranges */
+function areValidCoordinates(lat: unknown, lon: unknown): boolean {
+  return (
+    typeof lat === 'number' &&
+    typeof lon === 'number' &&
+    Number.isFinite(lat) &&
+    Number.isFinite(lon) &&
+    lat >= -90 &&
+    lat <= 90 &&
+    lon >= -180 &&
+    lon <= 180
+  );
+}
+
+/** Escape markdown and remove invisible unicode chars */
+function sanitizeForDiscord(text: string): string {
+  return text
+    .replace(/[*_`~[\]()\\]/g, '\\$&')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/[\u202A-\u202E]/g, '');
 }
 
 /**
@@ -219,7 +249,7 @@ export class NotificationService {
     if (settings.discordWebhookUrl) {
       promises.push(
         this.sendDiscordMessage(settings.discordWebhookUrl, {
-          title: 'Stream Stopped',
+          title: 'Stream Ended',
           color: 0x95a5a6, // Gray
           fields: [
             {
@@ -332,7 +362,8 @@ export class NotificationService {
     const ruleType = violation.rule.type as keyof typeof RULE_DISPLAY_NAMES;
     const severity = violation.severity as keyof typeof SEVERITY_LEVELS;
 
-    const detailsJson = JSON.stringify(violation.data, null, 2);
+    // Format violation details based on rule type
+    const detailFields = this.formatViolationDetails(violation.rule.type, violation.data);
 
     await this.sendDiscordMessage(webhookUrl, {
       title: `Sharing Violation Detected`,
@@ -341,9 +372,193 @@ export class NotificationService {
         { name: 'User', value: violation.user.username, inline: true },
         { name: 'Rule', value: RULE_DISPLAY_NAMES[ruleType], inline: true },
         { name: 'Severity', value: SEVERITY_LEVELS[severity].label, inline: true },
-        { name: 'Details', value: truncateForDiscord(detailsJson) },
+        ...detailFields,
       ],
     });
+  }
+
+  /**
+   * Format violation details into Discord embed fields based on rule type
+   */
+  private formatViolationDetails(
+    ruleType: string,
+    data: Record<string, unknown> | null
+  ): Array<{ name: string; value: string; inline?: boolean }> {
+    if (!data) return [];
+
+    switch (ruleType) {
+      case 'impossible_travel': {
+        const d = data as {
+          distance?: number;
+          timeDiffHours?: number;
+          calculatedSpeed?: number;
+          maxAllowedSpeed?: number;
+          currentLocation?: { lat: number; lon: number };
+          previousLocation?: { lat: number; lon: number };
+        };
+        const fields: Array<{ name: string; value: string; inline?: boolean }> = [];
+
+        if (d.distance != null) {
+          fields.push({
+            name: 'Distance',
+            value: truncateForDiscord(`**${d.distance.toFixed(1)} km**`),
+            inline: true,
+          });
+        }
+        if (d.timeDiffHours != null) {
+          const minutes = Math.round(d.timeDiffHours * 60);
+          fields.push({
+            name: 'Time Gap',
+            value: truncateForDiscord(`**${minutes} min**`),
+            inline: true,
+          });
+        }
+        if (d.calculatedSpeed != null) {
+          fields.push({
+            name: 'Speed',
+            value: truncateForDiscord(
+              `**${Math.round(d.calculatedSpeed)} km/h** (max: ${d.maxAllowedSpeed ?? VIOLATION_DEFAULTS.MAX_SPEED_KMH})`
+            ),
+            inline: true,
+          });
+        }
+        // Validate coordinates before building map URL
+        if (
+          d.previousLocation &&
+          d.currentLocation &&
+          areValidCoordinates(d.previousLocation.lat, d.previousLocation.lon) &&
+          areValidCoordinates(d.currentLocation.lat, d.currentLocation.lon)
+        ) {
+          fields.push({
+            name: 'Route',
+            value: truncateForDiscord(
+              `[View on Map](https://www.google.com/maps/dir/${d.previousLocation.lat},${d.previousLocation.lon}/${d.currentLocation.lat},${d.currentLocation.lon})`
+            ),
+            inline: false,
+          });
+        }
+        return fields;
+      }
+
+      case 'simultaneous_locations': {
+        const d = data as {
+          locationCount?: number;
+          distance?: number;
+          minRequiredDistance?: number;
+          locations?: Array<{ lat: number; lon: number; city?: string; country?: string }>;
+        };
+        const fields: Array<{ name: string; value: string; inline?: boolean }> = [];
+
+        if (d.locationCount != null) {
+          fields.push({
+            name: 'Locations',
+            value: truncateForDiscord(`**${d.locationCount}** active`),
+            inline: true,
+          });
+        }
+        if (d.distance != null) {
+          fields.push({
+            name: 'Distance',
+            value: truncateForDiscord(`**${d.distance.toFixed(1)} km** apart`),
+            inline: true,
+          });
+        }
+        if (d.locations && d.locations.length > 0) {
+          const locationList = d.locations
+            .slice(0, 3)
+            .filter((loc) => (loc.city && loc.country) || areValidCoordinates(loc.lat, loc.lon))
+            .map((loc) => {
+              if (loc.city && loc.country) {
+                return `${sanitizeForDiscord(loc.city)}, ${sanitizeForDiscord(loc.country)}`;
+              }
+              return `${loc.lat.toFixed(2)}, ${loc.lon.toFixed(2)}`;
+            })
+            .join('\n');
+          if (locationList) {
+            fields.push({
+              name: 'Active Locations',
+              value: truncateForDiscord(locationList),
+              inline: false,
+            });
+          }
+        }
+        return fields;
+      }
+
+      case 'concurrent_streams': {
+        const d = data as {
+          activeStreamCount?: number;
+          maxAllowedStreams?: number;
+        };
+        const fields: Array<{ name: string; value: string; inline?: boolean }> = [];
+
+        if (d.activeStreamCount != null) {
+          fields.push({
+            name: 'Active Streams',
+            value: truncateForDiscord(
+              `**${d.activeStreamCount}** (max: ${d.maxAllowedStreams ?? VIOLATION_DEFAULTS.MAX_STREAMS})`
+            ),
+            inline: true,
+          });
+        }
+        return fields;
+      }
+
+      case 'device_velocity': {
+        const d = data as {
+          uniqueIpCount?: number;
+          maxAllowedIps?: number;
+          windowHours?: number;
+        };
+        const fields: Array<{ name: string; value: string; inline?: boolean }> = [];
+
+        if (d.uniqueIpCount != null) {
+          fields.push({
+            name: 'Unique IPs',
+            value: truncateForDiscord(
+              `**${d.uniqueIpCount}** in ${d.windowHours ?? VIOLATION_DEFAULTS.WINDOW_HOURS}h (max: ${d.maxAllowedIps ?? VIOLATION_DEFAULTS.MAX_IPS})`
+            ),
+            inline: true,
+          });
+        }
+        return fields;
+      }
+
+      case 'geo_restriction': {
+        const d = data as {
+          country?: string;
+          mode?: string;
+        };
+        const fields: Array<{ name: string; value: string; inline?: boolean }> = [];
+
+        if (typeof d.country === 'string' && d.country) {
+          const modeText = d.mode === 'allowlist' ? 'not in allowlist' : 'in blocklist';
+          fields.push({
+            name: 'Blocked Location',
+            value: truncateForDiscord(`**${sanitizeForDiscord(d.country)}** (${modeText})`),
+            inline: true,
+          });
+        }
+        return fields;
+      }
+
+      default:
+        // Fallback: show key-value pairs nicely formatted
+        return Object.entries(data)
+          .filter(([, v]) => {
+            const type = typeof v;
+            return v != null && (type === 'string' || type === 'number' || type === 'boolean');
+          })
+          .slice(0, 5)
+          .map(([k, v]) => ({
+            name: k
+              .replace(/([A-Z])/g, ' $1')
+              .trim()
+              .replace(/^./, (s) => s.toUpperCase()),
+            value: truncateForDiscord(String(v)),
+            inline: true,
+          }));
+    }
   }
 
   private async sendDiscordMessage(
@@ -452,8 +667,8 @@ export class NotificationService {
       const durationStr = session.durationMs ? ` (${formatDuration(session.durationMs)})` : '';
       return {
         topic: ntfyTopic,
-        title: 'Stream Stopped',
-        message: `${userName} stopped watching ${mediaDisplay}${durationStr}`,
+        title: 'Stream Ended',
+        message: `${userName} finished watching ${mediaDisplay}${durationStr}`,
         priority: 3,
         tags: ['stop_button'],
       };
@@ -528,8 +743,8 @@ export class NotificationService {
       // session_stopped
       const durationStr = session.durationMs ? ` (${formatDuration(session.durationMs)})` : '';
       return {
-        title: 'Stream Stopped',
-        body: `${userName} stopped watching ${mediaDisplay}${durationStr}`,
+        title: 'Stream Ended',
+        body: `${userName} finished watching ${mediaDisplay}${durationStr}`,
         type: 'info',
       };
     }

@@ -505,10 +505,10 @@ describe('Debug Routes', () => {
       expect(body.success).toBe(true);
       expect(body.message).toContain('Factory reset complete');
 
-      // Verify delete was called 11 times (violations, terminationLogs, sessions, rules,
+      // Verify delete was called 12 times (violations, terminationLogs, sessions, rules,
       // notificationChannelRouting, notificationPreferences, mobileSessions, mobileTokens,
-      // serverUsers, users, servers)
-      expect(db.delete).toHaveBeenCalledTimes(11);
+      // serverUsers, servers, plexAccounts, users)
+      expect(db.delete).toHaveBeenCalledTimes(12);
 
       // Verify settings update was called
       expect(db.update).toHaveBeenCalled();

@@ -138,7 +138,7 @@ export const locationsRoutes: FastifyPluginAsync = async (app) => {
           ${whereClause}
           GROUP BY s.geo_city, s.geo_region, s.geo_country, s.geo_lat, s.geo_lon
           ORDER BY count DESC
-          LIMIT 200
+          LIMIT 500
         `),
 
       // Query 2: Cascading filter options - each filter type uses conditions from OTHER active filters

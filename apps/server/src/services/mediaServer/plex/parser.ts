@@ -14,6 +14,7 @@ import {
   parseArray,
   parseFirstArrayElement,
 } from '../../../utils/parsing.js';
+import { normalizeStreamDecisions } from '../../../utils/transcodeNormalizer.js';
 import type { MediaSession, MediaUser, MediaLibrary, MediaWatchHistoryItem } from '../types.js';
 
 // ============================================================================
@@ -107,15 +108,14 @@ export function parseSession(item: Record<string, unknown>): MediaSession {
   const videoResolution = parseOptionalString(
     parseFirstArrayElement(item.Media, 'videoResolution')
   );
+  const videoWidth = parseOptionalNumber(parseFirstArrayElement(item.Media, 'width'));
   const videoHeight = parseOptionalNumber(parseFirstArrayElement(item.Media, 'height'));
 
-  // Determine transcode status - check both video and audio decisions
-  const videoDecision = parseString(transcodeSession?.videoDecision, 'directplay');
-  const audioDecision = parseString(transcodeSession?.audioDecision, 'directplay');
-  // isTranscode = true if either video or audio is being transcoded (not just copied/remuxed)
-  const isTranscode =
-    (videoDecision !== 'directplay' && videoDecision !== 'copy') ||
-    (audioDecision !== 'directplay' && audioDecision !== 'copy');
+  // Get stream decisions using the transcode normalizer
+  const { videoDecision, audioDecision, isTranscode } = normalizeStreamDecisions(
+    transcodeSession?.videoDecision as string | null,
+    transcodeSession?.audioDecision as string | null
+  );
 
   const session: MediaSession = {
     sessionKey: parseString(item.sessionKey),
@@ -158,6 +158,7 @@ export function parseSession(item: Record<string, unknown>): MediaSession {
       videoDecision,
       audioDecision,
       videoResolution,
+      videoWidth,
       videoHeight,
     },
     // Plex termination API requires Session.id, not sessionKey
@@ -210,6 +211,16 @@ export function parseLocalUser(user: Record<string, unknown>): MediaUser {
 }
 
 /**
+ * Parse Unix timestamp from unknown value to Date
+ */
+function parseUnixTimestamp(value: unknown): Date | undefined {
+  if (value == null) return undefined;
+  const timestamp = typeof value === 'number' ? value : parseInt(String(value), 10);
+  if (isNaN(timestamp) || timestamp <= 0) return undefined;
+  return new Date(timestamp * 1000); // Convert seconds to milliseconds
+}
+
+/**
  * Parse Plex.tv user data into a MediaUser object
  * Used for users from plex.tv API endpoints
  */
@@ -226,6 +237,8 @@ export function parsePlexTvUser(
     isDisabled: false,
     isHomeUser: parseBoolean(user.home) || parseBoolean(user.isHomeUser),
     sharedLibraries: sharedLibraries ?? [],
+    // Plex.tv API returns joinedAt (Unix timestamp) for when user joined Plex
+    joinedAt: parseUnixTimestamp(user.joinedAt) ?? parseUnixTimestamp(user.createdAt),
   };
 }
 
@@ -317,6 +330,12 @@ export interface PlexServerConnection {
   port: number;
   uri: string;
   local: boolean;
+  /**
+   * True if this connection goes through Plex's relay service.
+   * Relay connections are bandwidth-limited (2Mbps) and designed for client apps,
+   * not server-to-server communication.
+   */
+  relay: boolean;
 }
 
 /**
@@ -356,6 +375,7 @@ export function parseServerConnection(conn: Record<string, unknown>): PlexServer
     port: parseNumber(conn.port, 32400),
     uri: parseString(conn.uri),
     local: parseBoolean(conn.local),
+    relay: parseBoolean(conn.relay),
   };
 }
 
@@ -363,8 +383,12 @@ export function parseServerConnection(conn: Record<string, unknown>): PlexServer
  * Parse server resource from plex.tv resources API
  *
  * Filters connections based on:
+ * - relay: Relay connections are filtered out (bandwidth-limited, for client apps only)
  * - httpsRequired: If true, only HTTPS connections are usable (HTTP will be rejected)
- * - publicAddressMatches: If false (different network), only remote connections work
+ *
+ * Note: We do NOT filter based on publicAddressMatches because that field reflects
+ * the browser's network context during OAuth, not Tracearr server's network context.
+ * Tracearr may be on the same Docker network as Plex even if the browser is remote.
  */
 export function parseServerResource(
   resource: Record<string, unknown>,
@@ -378,21 +402,20 @@ export function parseServerResource(
     parseServerConnection(conn as Record<string, unknown>)
   );
 
-  // Filter connections based on what's actually usable
+  // Filter connections based on what's actually usable from server-side
   const connections = allConnections.filter((conn) => {
+    // Relay connections don't work for server-to-server communication
+    // They're bandwidth-limited (2Mbps) and designed for client apps
+    if (conn.relay) {
+      return false;
+    }
+
     // If HTTPS is required, filter out HTTP connections
     if (httpsRequired && conn.protocol !== 'https') {
       return false;
     }
 
-    // Filter based on network location (like Tautulli does)
-    if (publicAddressMatches) {
-      // Same network: all connections should work
-      return true;
-    } else {
-      // Different network: only remote connections will work (local IPs unreachable)
-      return !conn.local;
-    }
+    return true;
   });
 
   // If filtering removed all connections, fall back to showing all
@@ -465,6 +488,17 @@ export function extractXmlId(xml: string): string {
 }
 
 /**
+ * Parse Unix timestamp from XML attribute to Date (Plex uses seconds since epoch)
+ */
+function parseXmlTimestamp(xml: string, attr: string): Date | undefined {
+  const value = extractXmlAttribute(xml, attr);
+  if (!value) return undefined;
+  const timestamp = parseInt(value, 10);
+  if (isNaN(timestamp) || timestamp <= 0) return undefined;
+  return new Date(timestamp * 1000); // Convert seconds to milliseconds
+}
+
+/**
  * Parse a user from XML (from /api/users endpoint)
  */
 export function parseXmlUser(userXml: string): MediaUser {
@@ -476,6 +510,8 @@ export function parseXmlUser(userXml: string): MediaUser {
     isAdmin: false,
     isHomeUser: extractXmlAttribute(userXml, 'home') === '1',
     sharedLibraries: [],
+    // Plex provides createdAt (account creation) - use as joinedAt
+    joinedAt: parseXmlTimestamp(userXml, 'createdAt'),
   };
 }
 

@@ -25,6 +25,10 @@ import type {
   PlexDiscoveredServer,
   PlexDiscoveredConnection,
   PlexAvailableServersResponse,
+  PlexAccount,
+  PlexAccountsResponse,
+  LinkPlexAccountResponse,
+  UnlinkPlexAccountResponse,
   NotificationChannelRouting,
   NotificationEventType,
   HistorySessionResponse,
@@ -34,7 +38,13 @@ import type {
 } from '@tracearr/shared';
 
 // Re-export shared types needed by frontend components
-export type { PlexDiscoveredServer, PlexDiscoveredConnection, PlexAvailableServersResponse };
+export type {
+  PlexDiscoveredServer,
+  PlexDiscoveredConnection,
+  PlexAvailableServersResponse,
+  PlexAccount,
+  PlexAccountsResponse,
+};
 import { API_BASE_PATH, getClientTimezone } from '@tracearr/shared';
 
 // Stats time range parameters
@@ -84,7 +94,7 @@ export interface PlexCheckPinResponse {
   user?: User;
   // If new user (needs server selection)
   needsServerSelection?: boolean;
-  servers?: PlexServerInfo[];
+  servers?: PlexDiscoveredServer[]; // Now includes reachability info
   tempToken?: string;
 }
 
@@ -191,8 +201,9 @@ class ApiClient {
       ...(options.headers as Record<string, string>),
     };
 
-    // Only set Content-Type for requests with a body
-    if (options.body) {
+    // Only set Content-Type for requests with a body, but NOT for FormData
+    // (browser sets correct Content-Type with boundary for multipart)
+    if (options.body && !(options.body instanceof FormData)) {
       headers['Content-Type'] = 'application/json';
     }
 
@@ -330,11 +341,18 @@ class ApiClient {
       ),
 
     // Get available Plex servers (authenticated - for adding additional servers)
-    getAvailablePlexServers: () =>
-      this.request<PlexAvailableServersResponse>('/auth/plex/available-servers'),
+    getAvailablePlexServers: (accountId?: string) => {
+      const params = accountId ? `?accountId=${accountId}` : '';
+      return this.request<PlexAvailableServersResponse>(`/auth/plex/available-servers${params}`);
+    },
 
     // Add an additional Plex server (authenticated - owner only)
-    addPlexServer: (data: { serverUri: string; serverName: string; clientIdentifier: string }) =>
+    addPlexServer: (data: {
+      serverUri: string;
+      serverName: string;
+      clientIdentifier: string;
+      accountId?: string;
+    }) =>
       this.request<{ server: Server; usersAdded: number; librariesSynced: number }>(
         '/auth/plex/add-server',
         {
@@ -342,6 +360,22 @@ class ApiClient {
           body: JSON.stringify(data),
         }
       ),
+
+    // Get linked Plex accounts (authenticated - owner only)
+    getPlexAccounts: () => this.request<PlexAccountsResponse>('/auth/plex/accounts'),
+
+    // Link a new Plex account via OAuth PIN (authenticated - owner only)
+    linkPlexAccount: (pin: string) =>
+      this.request<LinkPlexAccountResponse>('/auth/plex/link-account', {
+        method: 'POST',
+        body: JSON.stringify({ pin }),
+      }),
+
+    // Unlink a Plex account (authenticated - owner only)
+    unlinkPlexAccount: (id: string) =>
+      this.request<UnlinkPlexAccountResponse>(`/auth/plex/accounts/${id}`, {
+        method: 'DELETE',
+      }),
 
     // Jellyfin server connection with API key (requires auth)
     connectJellyfinWithApiKey: (data: { serverUrl: string; serverName: string; apiKey: string }) =>
@@ -475,23 +509,25 @@ class ApiClient {
       const searchParams = new URLSearchParams();
       if (params.cursor) searchParams.set('cursor', params.cursor);
       if (params.pageSize) searchParams.set('pageSize', String(params.pageSize));
-      if (params.serverUserId) searchParams.set('serverUserId', params.serverUserId);
+      if (params.serverUserIds?.length)
+        searchParams.set('serverUserIds', params.serverUserIds.join(','));
       if (params.serverId) searchParams.set('serverId', params.serverId);
       if (params.state) searchParams.set('state', params.state);
-      if (params.mediaType) searchParams.set('mediaType', params.mediaType);
+      if (params.mediaTypes?.length) searchParams.set('mediaTypes', params.mediaTypes.join(','));
       if (params.startDate) searchParams.set('startDate', params.startDate.toISOString());
       if (params.endDate) searchParams.set('endDate', params.endDate.toISOString());
       if (params.search) searchParams.set('search', params.search);
-      if (params.platform) searchParams.set('platform', params.platform);
+      if (params.platforms?.length) searchParams.set('platforms', params.platforms.join(','));
       if (params.product) searchParams.set('product', params.product);
       if (params.device) searchParams.set('device', params.device);
       if (params.playerName) searchParams.set('playerName', params.playerName);
       if (params.ipAddress) searchParams.set('ipAddress', params.ipAddress);
-      if (params.geoCountry) searchParams.set('geoCountry', params.geoCountry);
+      if (params.geoCountries?.length)
+        searchParams.set('geoCountries', params.geoCountries.join(','));
       if (params.geoCity) searchParams.set('geoCity', params.geoCity);
       if (params.geoRegion) searchParams.set('geoRegion', params.geoRegion);
-      if (params.isTranscode !== undefined)
-        searchParams.set('isTranscode', String(params.isTranscode));
+      if (params.transcodeDecisions?.length)
+        searchParams.set('transcodeDecisions', params.transcodeDecisions.join(','));
       if (params.watched !== undefined) searchParams.set('watched', String(params.watched));
       if (params.excludeShortSessions) searchParams.set('excludeShortSessions', 'true');
       if (params.orderBy) searchParams.set('orderBy', params.orderBy);
@@ -500,10 +536,13 @@ class ApiClient {
     },
     /**
      * Get available filter values for dropdowns on the History page.
+     * Accepts optional date range to match history query filters.
      */
-    filterOptions: (serverId?: string) => {
+    filterOptions: (params?: { serverId?: string; startDate?: Date; endDate?: Date }) => {
       const searchParams = new URLSearchParams();
-      if (serverId) searchParams.set('serverId', serverId);
+      if (params?.serverId) searchParams.set('serverId', params.serverId);
+      if (params?.startDate) searchParams.set('startDate', params.startDate.toISOString());
+      if (params?.endDate) searchParams.set('endDate', params.endDate.toISOString());
       return this.request<HistoryFilterOptions>(
         `/sessions/filter-options?${searchParams.toString()}`
       );
@@ -760,6 +799,141 @@ class ApiClient {
           finishedAt?: number;
         }>(`/import/tautulli/${jobId}`),
     },
+    jellystat: {
+      /**
+       * Start Jellystat import from backup file
+       * @param serverId - Target Jellyfin/Emby server
+       * @param file - Jellystat backup JSON file
+       * @param enrichMedia - Whether to enrich with metadata (default: true)
+       */
+      start: async (serverId: string, file: File, enrichMedia: boolean = true) => {
+        const formData = new FormData();
+        // Fields must come BEFORE file - @fastify/multipart stops parsing after file
+        formData.append('serverId', serverId);
+        formData.append('enrichMedia', String(enrichMedia));
+        formData.append('file', file);
+
+        return this.request<{ status: string; jobId?: string; message: string }>(
+          '/import/jellystat',
+          {
+            method: 'POST',
+            body: formData,
+            headers: {}, // Let browser set Content-Type with boundary for multipart
+          }
+        );
+      },
+      getActive: (serverId: string) =>
+        this.request<{
+          active: boolean;
+          jobId?: string;
+          state?: string;
+          progress?: number | object;
+          createdAt?: number;
+        }>(`/import/jellystat/active/${serverId}`),
+      getStatus: (jobId: string) =>
+        this.request<{
+          jobId: string;
+          state: string;
+          progress: number | object | null;
+          result?: {
+            success: boolean;
+            imported: number;
+            skipped: number;
+            errors: number;
+            enriched: number;
+            message: string;
+          };
+          failedReason?: string;
+          createdAt?: number;
+          finishedAt?: number;
+        }>(`/import/jellystat/${jobId}`),
+      cancel: (jobId: string) =>
+        this.request<{ status: string; jobId: string }>(`/import/jellystat/${jobId}`, {
+          method: 'DELETE',
+        }),
+    },
+  };
+
+  // Maintenance jobs
+  maintenance = {
+    getJobs: () =>
+      this.request<{
+        jobs: Array<{
+          type: string;
+          name: string;
+          description: string;
+        }>;
+      }>('/maintenance/jobs'),
+    startJob: (type: string) =>
+      this.request<{ status: string; jobId: string; message: string }>(
+        `/maintenance/jobs/${type}`,
+        {
+          method: 'POST',
+          body: '{}',
+        }
+      ),
+    getProgress: () =>
+      this.request<{
+        progress: {
+          type: string;
+          status: string;
+          totalRecords: number;
+          processedRecords: number;
+          updatedRecords: number;
+          skippedRecords: number;
+          errorRecords: number;
+          message: string;
+          startedAt?: string;
+          completedAt?: string;
+        } | null;
+      }>('/maintenance/progress'),
+    getJobStatus: (jobId: string) =>
+      this.request<{
+        jobId: string;
+        state: string;
+        progress: number | object | null;
+        result?: {
+          success: boolean;
+          type: string;
+          processed: number;
+          updated: number;
+          skipped: number;
+          errors: number;
+          durationMs: number;
+          message: string;
+        };
+        failedReason?: string;
+        createdAt?: number;
+        finishedAt?: number;
+      }>(`/maintenance/jobs/${jobId}/status`),
+    getStats: () =>
+      this.request<{
+        waiting: number;
+        active: number;
+        completed: number;
+        failed: number;
+        delayed: number;
+      }>('/maintenance/stats'),
+    getHistory: () =>
+      this.request<{
+        history: Array<{
+          jobId: string;
+          type: string;
+          state: string;
+          createdAt: number;
+          finishedAt?: number;
+          result?: {
+            success: boolean;
+            type: string;
+            processed: number;
+            updated: number;
+            skipped: number;
+            errors: number;
+            durationMs: number;
+            message: string;
+          };
+        }>;
+      }>('/maintenance/history'),
   };
 
   // Mobile access

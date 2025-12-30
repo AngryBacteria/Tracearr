@@ -64,6 +64,7 @@ export class SSEManager extends EventEmitter {
   private pubSubService: PubSubService | null = null;
   private reconciliationTimer: NodeJS.Timeout | null = null;
   private initialized = false;
+  private pendingOperations = new Set<string>();
 
   /**
    * Initialize the SSE manager with cache services
@@ -136,50 +137,76 @@ export class SSEManager extends EventEmitter {
     url: string,
     token: string
   ): Promise<void> {
-    // Remove existing connection if present
-    if (this.connections.has(serverId)) {
-      await this.removeServer(serverId);
+    if (this.pendingOperations.has(serverId)) {
+      console.log(`[SSEManager] Operation already in progress for ${serverName}, skipping`);
+      return;
     }
+    this.pendingOperations.add(serverId);
 
-    const connection: ServerConnection = {
-      serverId,
-      serverName,
-      serverType,
-      eventSource: null,
-      state: 'disconnected',
-      inFallback: false,
-    };
+    try {
+      // Remove existing connection if present
+      if (this.connections.has(serverId)) {
+        await this.removeServerInternal(serverId);
+      }
 
-    // Only Plex supports SSE currently
-    if (serverType === 'plex') {
-      const eventSource = new PlexEventSource({
+      const connection: ServerConnection = {
         serverId,
         serverName,
-        url,
-        token,
-      });
+        serverType,
+        eventSource: null,
+        state: 'disconnected',
+        inFallback: false,
+      };
 
-      // Wire up event handlers
-      this.setupEventHandlers(eventSource, serverId, serverName);
+      // Only Plex supports SSE currently
+      if (serverType === 'plex') {
+        const eventSource = new PlexEventSource({
+          serverId,
+          serverName,
+          url,
+          token,
+        });
 
-      connection.eventSource = eventSource;
+        // Wire up event handlers
+        this.setupEventHandlers(eventSource, serverId, serverName);
 
-      // Connect
-      await eventSource.connect();
-    } else {
-      // Jellyfin/Emby: Start in fallback mode (polling)
-      connection.inFallback = true;
-      connection.state = 'fallback';
-      this.emit('fallback:activated', { serverId, serverName });
+        connection.eventSource = eventSource;
+
+        // Connect
+        await eventSource.connect();
+      } else {
+        // Jellyfin/Emby: Start in fallback mode (polling)
+        connection.inFallback = true;
+        connection.state = 'fallback';
+        this.emit('fallback:activated', { serverId, serverName });
+      }
+
+      this.connections.set(serverId, connection);
+    } finally {
+      this.pendingOperations.delete(serverId);
     }
-
-    this.connections.set(serverId, connection);
   }
 
   /**
    * Remove a server and disconnect SSE
    */
   async removeServer(serverId: string): Promise<void> {
+    if (this.pendingOperations.has(serverId)) {
+      console.log(
+        `[SSEManager] Operation already in progress for server ${serverId}, skipping remove`
+      );
+      return;
+    }
+    this.pendingOperations.add(serverId);
+
+    try {
+      await this.removeServerInternal(serverId);
+    } finally {
+      this.pendingOperations.delete(serverId);
+    }
+  }
+
+  private async removeServerInternal(serverId: string): Promise<void> {
     const connection = this.connections.get(serverId);
     if (!connection) {
       return;
@@ -317,43 +344,71 @@ export class SSEManager extends EventEmitter {
    * Manually trigger a reconnection attempt for a server
    */
   async reconnect(serverId: string): Promise<void> {
-    const connection = this.connections.get(serverId);
-    if (!connection?.eventSource) {
+    if (this.pendingOperations.has(serverId)) {
+      console.log(
+        `[SSEManager] Operation already in progress for server ${serverId}, skipping reconnect`
+      );
       return;
     }
+    this.pendingOperations.add(serverId);
 
-    console.log(`[SSEManager] Manual reconnect for ${connection.serverName}`);
-    connection.eventSource.disconnect();
-    await connection.eventSource.connect();
+    try {
+      const connection = this.connections.get(serverId);
+      if (!connection?.eventSource) {
+        return;
+      }
+
+      console.log(`[SSEManager] Manual reconnect for ${connection.serverName}`);
+      connection.eventSource.disconnect();
+      await connection.eventSource.connect();
+    } finally {
+      this.pendingOperations.delete(serverId);
+    }
   }
 
   /**
    * Refresh server list (call when servers are added/removed)
    */
   async refresh(): Promise<void> {
-    const allServers = await db.select().from(servers);
-
-    const currentServerIds = new Set(allServers.map((s) => s.id));
-    const connectedServerIds = new Set(this.connections.keys());
-
-    // Remove servers that no longer exist
-    for (const serverId of connectedServerIds) {
-      if (!currentServerIds.has(serverId)) {
-        await this.removeServer(serverId);
-      }
+    const refreshLockId = '__refresh__';
+    if (this.pendingOperations.has(refreshLockId)) {
+      console.log('[SSEManager] Refresh already in progress, skipping');
+      return;
     }
+    this.pendingOperations.add(refreshLockId);
 
-    // Add new Plex servers
-    for (const server of allServers) {
-      if (!connectedServerIds.has(server.id) && server.type === 'plex') {
-        await this.addServer(
-          server.id,
-          server.name,
-          server.type as 'plex',
-          server.url,
-          server.token
-        );
+    try {
+      let allServers;
+      try {
+        allServers = await db.select().from(servers);
+      } catch (error) {
+        console.error('[SSEManager] Failed to fetch servers from database:', error);
+        return;
       }
+
+      const currentServerIds = new Set(allServers.map((s) => s.id));
+      const connectedServerIds = new Set(this.connections.keys());
+
+      for (const serverId of connectedServerIds) {
+        if (!currentServerIds.has(serverId)) {
+          await this.removeServerInternal(serverId);
+        }
+      }
+
+      // Add new Plex servers
+      for (const server of allServers) {
+        if (!connectedServerIds.has(server.id) && server.type === 'plex') {
+          await this.addServer(
+            server.id,
+            server.name,
+            server.type as 'plex',
+            server.url,
+            server.token
+          );
+        }
+      }
+    } finally {
+      this.pendingOperations.delete(refreshLockId);
     }
   }
 }

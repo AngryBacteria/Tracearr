@@ -212,19 +212,29 @@ export type RuleType =
 export interface ImpossibleTravelParams {
   maxSpeedKmh: number;
   ignoreVpnRanges?: boolean;
+  /** When true, exclude sessions from private/local network IPs from comparison */
+  excludePrivateIps?: boolean;
 }
 
 export interface SimultaneousLocationsParams {
   minDistanceKm: number;
+  /** When true, exclude sessions from private/local network IPs from comparison */
+  excludePrivateIps?: boolean;
 }
 
 export interface DeviceVelocityParams {
   maxIps: number;
   windowHours: number;
+  /** When true, exclude private/local network IPs (192.168.x.x, 10.x.x.x, etc.) from unique IP count */
+  excludePrivateIps?: boolean;
+  /** When true, count by deviceId instead of IP - same device with different IPs counts as 1 */
+  groupByDevice?: boolean;
 }
 
 export interface ConcurrentStreamsParams {
   maxStreams: number;
+  /** When true, exclude sessions from private/local network IPs from stream count */
+  excludePrivateIps?: boolean;
 }
 
 export type GeoRestrictionMode = 'blocklist' | 'allowlist';
@@ -232,6 +242,8 @@ export type GeoRestrictionMode = 'blocklist' | 'allowlist';
 export interface GeoRestrictionParams {
   mode: GeoRestrictionMode;
   countries: string[];
+  /** When true, always allow sessions from private/local network IPs (default behavior, explicit option) */
+  excludePrivateIps?: boolean;
 }
 
 export type RuleParams =
@@ -522,6 +534,35 @@ export interface TautulliImportResult {
   }[];
 }
 
+// Jellystat import types
+export interface JellystatImportProgress {
+  status: 'idle' | 'parsing' | 'enriching' | 'processing' | 'complete' | 'error';
+  totalRecords: number;
+  processedRecords: number;
+  importedRecords: number;
+  skippedRecords: number;
+  errorRecords: number;
+  /** Number of media items enriched with metadata from Jellyfin */
+  enrichedRecords: number;
+  /** Current phase message */
+  message: string;
+}
+
+export interface JellystatImportResult {
+  success: boolean;
+  imported: number;
+  skipped: number;
+  errors: number;
+  enriched: number;
+  message: string;
+  /** Details about users that were skipped (not found in Tracearr) */
+  skippedUsers?: {
+    jellyfinUserId: string;
+    username: string | null;
+    recordCount: number;
+  }[];
+}
+
 // WebSocket event types
 export interface ServerToClientEvents {
   'session:started': (session: ActiveSession) => void;
@@ -530,7 +571,11 @@ export interface ServerToClientEvents {
   'violation:new': (violation: ViolationWithDetails) => void;
   'stats:updated': (stats: DashboardStats) => void;
   'import:progress': (progress: TautulliImportProgress) => void;
+  'import:jellystat:progress': (progress: JellystatImportProgress) => void;
+  'maintenance:progress': (progress: MaintenanceJobProgress) => void;
   'version:update': (data: { current: string; latest: string; releaseUrl: string }) => void;
+  'server:down': (data: { serverId: string; serverName: string }) => void;
+  'server:up': (data: { serverId: string; serverName: string }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -984,6 +1029,77 @@ export interface PlexDiscoveredServer {
 export interface PlexAvailableServersResponse {
   servers: PlexDiscoveredServer[];
   hasPlexToken: boolean; // False if user has no Plex servers connected
+}
+
+// =============================================================================
+// Plex Account Types (Multi-Account Support)
+// =============================================================================
+
+// Linked Plex account (for server discovery and management)
+export interface PlexAccount {
+  id: string;
+  plexAccountId: string; // Plex.tv account ID
+  plexUsername: string | null;
+  plexEmail: string | null;
+  plexThumbnail: string | null;
+  allowLogin: boolean; // Whether this account can be used for authentication
+  serverCount: number; // Number of Tracearr servers linked to this account
+  createdAt: Date;
+}
+
+// Response from GET /auth/plex/accounts
+export interface PlexAccountsResponse {
+  accounts: PlexAccount[];
+}
+
+// Request body for POST /auth/plex/link-account
+export interface LinkPlexAccountRequest {
+  pin: string; // Plex OAuth PIN
+}
+
+// Response from POST /auth/plex/link-account
+export interface LinkPlexAccountResponse {
+  account: PlexAccount;
+}
+
+// Response from DELETE /auth/plex/accounts/:id
+export interface UnlinkPlexAccountResponse {
+  success: boolean;
+}
+
+// =============================================================================
+// Maintenance Job Types
+// =============================================================================
+
+export type MaintenanceJobType =
+  | 'normalize_players'
+  | 'normalize_countries'
+  | 'fix_imported_progress';
+
+export type MaintenanceJobStatus = 'idle' | 'running' | 'complete' | 'error';
+
+export interface MaintenanceJobProgress {
+  type: MaintenanceJobType;
+  status: MaintenanceJobStatus;
+  totalRecords: number;
+  processedRecords: number;
+  updatedRecords: number;
+  skippedRecords: number;
+  errorRecords: number;
+  message: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface MaintenanceJobResult {
+  success: boolean;
+  type: MaintenanceJobType;
+  processed: number;
+  updated: number;
+  skipped: number;
+  errors: number;
+  durationMs: number;
+  message: string;
 }
 
 // =============================================================================

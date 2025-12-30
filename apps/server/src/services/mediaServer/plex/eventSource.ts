@@ -87,9 +87,16 @@ export class PlexEventSource extends EventEmitter {
   private reconnectAttempts = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private connectionTimer: NodeJS.Timeout | null = null;
   private lastEventTime: Date | null = null;
   private connectedAt: Date | null = null;
   private lastError: Error | null = null;
+
+  // close() doesn't remove addEventListener listeners, so we track refs for manual cleanup
+  private messageListener: ((e: EventSourceMessage) => void) | null = null;
+  private playingListener: ((e: EventSourceMessage) => void) | null = null;
+  private notificationListener: ((e: EventSourceMessage) => void) | null = null;
+  private pingListener: ((e: EventSourceMessage) => void) | null = null;
 
   constructor(config: { serverId: string; serverName: string; url: string; token: string }) {
     super();
@@ -160,7 +167,14 @@ export class PlexEventSource extends EventEmitter {
         headers,
       });
 
+      this.startConnectionTimeout();
+
       this.eventSource.onopen = () => {
+        if (this.state !== 'connecting') {
+          console.warn(`[SSE] Ignoring onopen for ${this.serverName} - state is ${this.state}`);
+          return;
+        }
+        this.clearConnectionTimeout();
         console.log(`[SSE] Connected to ${this.serverName}`);
         this.setState('connected');
         this.connectedAt = new Date();
@@ -169,19 +183,19 @@ export class PlexEventSource extends EventEmitter {
         this.startHeartbeatMonitor();
       };
 
+      this.messageListener = (event: EventSourceMessage) => this.handleMessage(event);
+      this.playingListener = (event: EventSourceMessage) => this.handleMessage(event);
+      this.notificationListener = (event: EventSourceMessage) => this.handleMessage(event);
+      this.pingListener = (_event: EventSourceMessage) => this.resetHeartbeatMonitor();
+
       // eventsource v4 requires addEventListener instead of onmessage
       // Plex sends named 'playing' events for all playback notifications
-      this.eventSource.addEventListener('message', (event: EventSourceMessage) => {
-        this.handleMessage(event);
-      });
+      this.eventSource.addEventListener('message', this.messageListener);
+      this.eventSource.addEventListener('playing', this.playingListener);
+      this.eventSource.addEventListener('notification', this.notificationListener);
 
-      this.eventSource.addEventListener('playing', (event: EventSourceMessage) => {
-        this.handleMessage(event);
-      });
-
-      this.eventSource.addEventListener('notification', (event: EventSourceMessage) => {
-        this.handleMessage(event);
-      });
+      // Plex sends ping events every 10 seconds as keepalive
+      this.eventSource.addEventListener('ping', this.pingListener);
 
       this.eventSource.onerror = (error: Event) => {
         this.handleError(error);
@@ -197,17 +211,41 @@ export class PlexEventSource extends EventEmitter {
   disconnect(): void {
     console.log(`[SSE] Disconnecting from ${this.serverName}`);
     this.clearTimers();
-
-    if (this.eventSource) {
-      this.eventSource.onopen = null;
-      this.eventSource.onerror = null;
-      // Note: addEventListener listeners are cleaned up when close() is called
-      this.eventSource.close();
-      this.eventSource = null;
-    }
-
+    this.cleanupEventSource();
     this.setState('disconnected');
     this.connectedAt = null;
+  }
+
+  /**
+   * Clean up EventSource instance and all listeners
+   */
+  private cleanupEventSource(): void {
+    if (!this.eventSource) {
+      return;
+    }
+
+    this.eventSource.onopen = null;
+    this.eventSource.onerror = null;
+
+    if (this.messageListener) {
+      this.eventSource.removeEventListener('message', this.messageListener);
+    }
+    if (this.playingListener) {
+      this.eventSource.removeEventListener('playing', this.playingListener);
+    }
+    if (this.notificationListener) {
+      this.eventSource.removeEventListener('notification', this.notificationListener);
+    }
+    if (this.pingListener) {
+      this.eventSource.removeEventListener('ping', this.pingListener);
+    }
+
+    this.eventSource.close();
+    this.eventSource = null;
+    this.messageListener = null;
+    this.playingListener = null;
+    this.notificationListener = null;
+    this.pingListener = null;
   }
 
   /**
@@ -284,14 +322,12 @@ export class PlexEventSource extends EventEmitter {
    * Handle connection error
    */
   private handleError(error: unknown): void {
-    let errorMessage = 'Connection error';
+    this.clearTimers();
 
+    let errorMessage = 'Connection error';
     if (error instanceof Error) {
       errorMessage = error.message;
-      // Log full error for debugging
-      console.error(`[SSE] Full error on ${this.serverName}:`, error);
     } else if (typeof error === 'object' && error !== null) {
-      // EventSource error events may have additional info
       const errorObj = error as Record<string, unknown>;
       if ('message' in errorObj) {
         errorMessage = String(errorObj.message);
@@ -299,22 +335,13 @@ export class PlexEventSource extends EventEmitter {
       if ('status' in errorObj) {
         errorMessage += ` (status: ${errorObj.status})`;
       }
-      console.error(`[SSE] Error event on ${this.serverName}:`, JSON.stringify(errorObj, null, 2));
     }
 
     this.lastError = error instanceof Error ? error : new Error(errorMessage);
-
-    console.error(`[SSE] Error on ${this.serverName}:`, errorMessage);
+    console.error(`[SSE] Error on ${this.serverName}: ${errorMessage}`);
     this.emit('connection:error', this.lastError);
 
-    // Clean up current connection
-    if (this.eventSource) {
-      this.eventSource.onopen = null;
-      this.eventSource.onerror = null;
-      // Note: addEventListener listeners are cleaned up when close() is called
-      this.eventSource.close();
-      this.eventSource = null;
-    }
+    this.cleanupEventSource();
 
     // Attempt reconnection with exponential backoff
     this.scheduleReconnect();
@@ -349,6 +376,9 @@ export class PlexEventSource extends EventEmitter {
     );
 
     this.reconnectTimer = setTimeout(() => {
+      if (this.state === 'disconnected') {
+        return;
+      }
       void this.connect();
     }, delay);
   }
@@ -370,6 +400,9 @@ export class PlexEventSource extends EventEmitter {
     }
 
     this.heartbeatTimer = setTimeout(() => {
+      if (this.state === 'disconnected') {
+        return;
+      }
       console.warn(`[SSE] Heartbeat timeout on ${this.serverName}, reconnecting`);
       this.handleError(new Error('Heartbeat timeout'));
     }, SSE_CONFIG.HEARTBEAT_TIMEOUT_MS);
@@ -386,6 +419,25 @@ export class PlexEventSource extends EventEmitter {
     if (this.heartbeatTimer) {
       clearTimeout(this.heartbeatTimer);
       this.heartbeatTimer = null;
+    }
+    this.clearConnectionTimeout();
+  }
+
+  private startConnectionTimeout(): void {
+    this.clearConnectionTimeout();
+    this.connectionTimer = setTimeout(() => {
+      if (this.state === 'disconnected') {
+        return;
+      }
+      console.warn(`[SSE] Connection timeout on ${this.serverName} (stuck in connecting state)`);
+      this.handleError(new Error('Connection timeout'));
+    }, SSE_CONFIG.HEARTBEAT_TIMEOUT_MS);
+  }
+
+  private clearConnectionTimeout(): void {
+    if (this.connectionTimer) {
+      clearTimeout(this.connectionTimer);
+      this.connectionTimer = null;
     }
   }
 

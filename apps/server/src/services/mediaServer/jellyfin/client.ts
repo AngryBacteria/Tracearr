@@ -22,9 +22,11 @@ import {
   parseWatchHistoryResponse,
   parseActivityLogResponse,
   parseAuthResponse,
+  parseItemsResponse,
   parseUser,
   type JellyfinActivityEntry,
   type JellyfinAuthResult,
+  type JellyfinItemResult,
 } from './parser.js';
 
 const CLIENT_NAME = 'Tracearr';
@@ -201,6 +203,38 @@ export class JellyfinClient implements IMediaServerClient, IMediaServerClientWit
   // ==========================================================================
 
   /**
+   * Batch fetch media items by their IDs
+   *
+   * Used for enriching imported session data with metadata like:
+   * - ParentIndexNumber (season number)
+   * - IndexNumber (episode number)
+   * - ProductionYear
+   * - ImageTags.Primary (for thumbnail)
+   *
+   * @param ids - Array of Jellyfin item IDs
+   * @returns Array of item data (items that don't exist are silently omitted)
+   *
+   * @example
+   * const items = await client.getItems(['id1', 'id2', 'id3']);
+   */
+  async getItems(ids: string[]): Promise<JellyfinItemResult[]> {
+    if (ids.length === 0) return [];
+
+    const params = new URLSearchParams({
+      Ids: ids.join(','),
+      // Include SeriesId and SeriesPrimaryImageTag for episode series poster lookup
+      Fields: 'ProductionYear,ParentIndexNumber,IndexNumber,SeriesId,SeriesPrimaryImageTag',
+    });
+
+    const data = await fetchJson<{ Items?: unknown[] }>(`${this.baseUrl}/Items?${params}`, {
+      headers: this.buildHeaders(),
+      service: 'jellyfin',
+    });
+
+    return parseItemsResponse(data);
+  }
+
+  /**
    * Get watch history for all users on the server
    */
   async getAllUsersWatchHistory(limit = 200): Promise<Map<string, MediaWatchHistoryItem[]>> {
@@ -288,13 +322,27 @@ export class JellyfinClient implements IMediaServerClient, IMediaServerClientWit
   }
 
   /**
+   * Error types for server admin verification
+   */
+  static readonly AdminVerifyError = {
+    CONNECTION_FAILED: 'CONNECTION_FAILED',
+    NOT_ADMIN: 'NOT_ADMIN',
+  } as const;
+
+  /**
    * Verify if token has admin access to a Jellyfin server
    *
    * Handles two token types:
    * 1. User tokens (from AuthenticateByName) - verified via /Users/Me
    * 2. API keys (created in Jellyfin admin) - verified via /Auth/Keys (requires admin)
+   *
+   * @returns { success: true } if admin access verified
+   * @returns { success: false, code, message } if verification failed
    */
-  static async verifyServerAdmin(apiKey: string, serverUrl: string): Promise<boolean> {
+  static async verifyServerAdmin(
+    apiKey: string,
+    serverUrl: string
+  ): Promise<{ success: true } | { success: false; code: string; message: string }> {
     const url = serverUrl.replace(/\/$/, '');
     const authHeader = `MediaBrowser Client="${CLIENT_NAME}", Device="${DEVICE_NAME}", DeviceId="${DEVICE_ID}", Version="${CLIENT_VERSION}", Token="${apiKey}"`;
 
@@ -302,6 +350,23 @@ export class JellyfinClient implements IMediaServerClient, IMediaServerClientWit
       'X-Emby-Authorization': authHeader,
       Accept: 'application/json',
     };
+
+    // First verify basic server connectivity
+    try {
+      await fetchJson<unknown>(`${url}/System/Info/Public`, {
+        headers: { Accept: 'application/json' }, // Public endpoint, no auth needed
+        service: 'jellyfin',
+        timeout: 10000,
+      });
+    } catch (error) {
+      // Connection failed - server unreachable, timeout, SSL error, etc.
+      const message = error instanceof Error ? error.message : 'Unable to connect to server';
+      return {
+        success: false,
+        code: JellyfinClient.AdminVerifyError.CONNECTION_FAILED,
+        message: `Cannot reach Jellyfin server at ${url}. ${message}`,
+      };
+    }
 
     // Try /Users/Me first (works for user tokens from authentication)
     try {
@@ -312,7 +377,15 @@ export class JellyfinClient implements IMediaServerClient, IMediaServerClientWit
       });
 
       const user = parseUser(data);
-      return user.isAdmin;
+      if (user.isAdmin) {
+        return { success: true };
+      }
+      // User exists but is not admin
+      return {
+        success: false,
+        code: JellyfinClient.AdminVerifyError.NOT_ADMIN,
+        message: 'You must be an admin on this Jellyfin server',
+      };
     } catch {
       // /Users/Me returns 400 for API keys (not user tokens)
       // Fall through to try /Auth/Keys
@@ -326,9 +399,13 @@ export class JellyfinClient implements IMediaServerClient, IMediaServerClientWit
         timeout: 10000,
       });
       // If we can access /Auth/Keys, the token has admin access
-      return true;
+      return { success: true };
     } catch {
-      return false;
+      return {
+        success: false,
+        code: JellyfinClient.AdminVerifyError.NOT_ADMIN,
+        message: 'API key does not have admin access on this Jellyfin server',
+      };
     }
   }
 }

@@ -127,6 +127,11 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       // Invalidate dashboard stats and session history (stopped session now has duration)
       void queryClient.invalidateQueries({ queryKey: ['stats', 'dashboard'] });
       void queryClient.invalidateQueries({ queryKey: ['sessions', 'list'] });
+
+      // Show toast if web notifications are enabled for stream_stopped
+      if (isWebToastEnabled('stream_stopped')) {
+        toast.info('Stream Stopped');
+      }
     });
 
     newSocket.on(WS_EVENTS.SESSION_UPDATED as 'session:updated', (_session: ActiveSession) => {
@@ -168,6 +173,29 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           },
           duration: 10000,
         });
+      }
+    );
+
+    newSocket.on(
+      WS_EVENTS.SERVER_DOWN as 'server:down',
+      (data: { serverId: string; serverName: string }) => {
+        if (isWebToastEnabled('server_down')) {
+          toast.error('Server Offline', {
+            description: `${data.serverName} is unreachable`,
+            duration: 10000,
+          });
+        }
+      }
+    );
+
+    newSocket.on(
+      WS_EVENTS.SERVER_UP as 'server:up',
+      (data: { serverId: string; serverName: string }) => {
+        if (isWebToastEnabled('server_up')) {
+          toast.success('Server Online', {
+            description: `${data.serverName} is back online`,
+          });
+        }
       }
     );
 

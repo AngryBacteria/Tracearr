@@ -1,14 +1,13 @@
-# Tracearr All-in-One (Supervised) Deployment
+# Tracearr - All-in-One Deployment
 #
-# This compose file runs the supervised image which includes:
-# - TimescaleDB (PostgreSQL 15)
-# - Redis
-# - Tracearr application
+# Single container with TimescaleDB, Redis, and Tracearr bundled together.
+# Secrets are auto-generated on first run — no configuration required.
 #
-# No external database or Redis required!
-# Secrets are auto-generated on first run and persisted.
+# REQUIREMENTS:
+#   - Minimum 2GB RAM (container runs PostgreSQL + Redis + Node.js)
+#   - Containers with less memory will crash with exit code 137 (OOM killed)
 #
-# Usage:
+# DEPLOY:
 #   docker compose -f docker/docker-compose.supervised.yml up -d
 #
 # Data is stored in Docker volumes by default.
@@ -18,6 +17,7 @@ services:
   tracearr:
     image: ghcr.io/connorgallopo/tracearr:supervised
     shm_size: 256mb  # Required for PostgreSQL shared memory
+    mem_limit: 2g    # Minimum 2GB required (PostgreSQL + Redis + Node.js)
     ports:
       - "${PORT:-3000}:3000"
     environment:

@@ -318,22 +318,22 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
     const {
       cursor,
       pageSize = 50,
-      serverUserId,
+      serverUserIds,
       serverId,
       state,
-      mediaType,
+      mediaTypes,
       startDate,
       endDate,
       search,
-      platform,
+      platforms,
       product,
       device,
       playerName,
       ipAddress,
-      geoCountry,
+      geoCountries,
       geoCity,
       geoRegion,
-      isTranscode,
+      transcodeDecisions,
       watched,
       excludeShortSessions,
       orderBy = 'startedAt',
@@ -369,11 +369,26 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    // Standard filters
-    if (serverUserId) conditions.push(sql`s.server_user_id = ${serverUserId}`);
+    if (serverUserIds && serverUserIds.length > 0) {
+      const ids = serverUserIds as string[];
+      if (ids.length === 1) {
+        conditions.push(sql`s.server_user_id = ${ids[0]}`);
+      } else {
+        const userIdList = ids.map((id) => sql`${id}`);
+        conditions.push(sql`s.server_user_id IN (${sql.join(userIdList, sql`, `)})`);
+      }
+    }
     if (serverId) conditions.push(sql`s.server_id = ${serverId}`);
     if (state) conditions.push(sql`s.state = ${state}`);
-    if (mediaType) conditions.push(sql`s.media_type = ${mediaType}`);
+    if (mediaTypes && mediaTypes.length > 0) {
+      const types = mediaTypes as string[];
+      if (types.length === 1) {
+        conditions.push(sql`s.media_type = ${types[0]}`);
+      } else {
+        const mediaTypeList = types.map((t) => sql`${t}`);
+        conditions.push(sql`s.media_type IN (${sql.join(mediaTypeList, sql`, `)})`);
+      }
+    }
     if (startDate) conditions.push(sql`s.started_at >= ${startDate}`);
     if (endDate) {
       // Adjust endDate to end of day (23:59:59.999) to include all sessions from that day
@@ -404,20 +419,41 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
       );
     }
 
-    // Device/client filters
-    if (platform) conditions.push(sql`s.platform = ${platform}`);
+    if (platforms && platforms.length > 0) {
+      const plats = platforms as string[];
+      if (plats.length === 1) {
+        conditions.push(sql`s.platform = ${plats[0]}`);
+      } else {
+        const platformList = plats.map((p) => sql`${p}`);
+        conditions.push(sql`s.platform IN (${sql.join(platformList, sql`, `)})`);
+      }
+    }
     if (product) conditions.push(sql`s.product = ${product}`);
     if (device) conditions.push(sql`s.device = ${device}`);
     if (playerName) conditions.push(sql`s.player_name ILIKE ${`%${playerName}%`}`);
 
-    // Network/location filters
     if (ipAddress) conditions.push(sql`s.ip_address = ${ipAddress}`);
-    if (geoCountry) conditions.push(sql`s.geo_country = ${geoCountry}`);
+    if (geoCountries && geoCountries.length > 0) {
+      const countries = geoCountries as string[];
+      if (countries.length === 1) {
+        conditions.push(sql`s.geo_country = ${countries[0]}`);
+      } else {
+        const countryList = countries.map((c) => sql`${c}`);
+        conditions.push(sql`s.geo_country IN (${sql.join(countryList, sql`, `)})`);
+      }
+    }
     if (geoCity) conditions.push(sql`s.geo_city = ${geoCity}`);
     if (geoRegion) conditions.push(sql`s.geo_region = ${geoRegion}`);
 
-    // Stream quality
-    if (isTranscode !== undefined) conditions.push(sql`s.is_transcode = ${isTranscode}`);
+    if (transcodeDecisions && transcodeDecisions.length > 0 && transcodeDecisions.length < 3) {
+      const decisions = transcodeDecisions as string[];
+      if (decisions.length === 1) {
+        conditions.push(sql`s.video_decision = ${decisions[0]}`);
+      } else {
+        const decisionList = decisions.map((d) => sql`${d}`);
+        conditions.push(sql`s.video_decision IN (${sql.join(decisionList, sql`, `)})`);
+      }
+    }
 
     // Status filters
     if (watched !== undefined) conditions.push(sql`s.watched = ${watched}`);
@@ -692,8 +728,25 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
    * and users to populate filter dropdowns on the History page.
    */
   app.get('/filter-options', { preHandler: [app.authenticate] }, async (request, reply) => {
-    const query = serverIdFilterSchema.safeParse(request.query);
-    const serverId = query.success ? query.data.serverId : undefined;
+    const query = request.query as {
+      serverId?: string;
+      startDate?: string;
+      endDate?: string;
+    };
+    const serverId = query.serverId;
+    const startDate = query.startDate ? new Date(query.startDate) : undefined;
+    const endDate = query.endDate ? new Date(query.endDate) : undefined;
+
+    if (startDate && isNaN(startDate.getTime())) {
+      return reply.badRequest('Invalid startDate format. Use ISO 8601 format.');
+    }
+    if (endDate && isNaN(endDate.getTime())) {
+      return reply.badRequest('Invalid endDate format. Use ISO 8601 format.');
+    }
+    if (startDate && endDate && startDate > endDate) {
+      return reply.badRequest('startDate must be before endDate');
+    }
+
     const authUser = request.user;
 
     // Build server access conditions
@@ -722,9 +775,22 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    // Only look at sessions from the last 90 days for efficiency
-    serverConditions.push(sql`s.started_at >= NOW() - INTERVAL '90 days'`);
+    if (startDate) {
+      serverConditions.push(sql`s.started_at >= ${startDate}`);
+    }
+    if (endDate) {
+      const endOfDay = new Date(endDate);
+      endOfDay.setHours(23, 59, 59, 999);
+      serverConditions.push(sql`s.started_at <= ${endOfDay}`);
+    }
 
+    // Helper to build WHERE clause with additional conditions
+    const buildWhereWithCondition = (extraCondition: ReturnType<typeof sql>) => {
+      const allConditions = [...serverConditions, extraCondition];
+      return sql`WHERE ${sql.join(allConditions, sql` AND `)}`;
+    };
+
+    // For users query, no extra NOT NULL condition needed (uses JOIN)
     const whereClause =
       serverConditions.length > 0 ? sql`WHERE ${sql.join(serverConditions, sql` AND `)}` : sql``;
 
@@ -741,8 +807,7 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
       db.execute(sql`
             SELECT platform as value, COUNT(DISTINCT COALESCE(reference_id, id))::int as count
             FROM sessions s
-            ${whereClause}
-            AND platform IS NOT NULL
+            ${buildWhereWithCondition(sql`platform IS NOT NULL`)}
             GROUP BY platform
             ORDER BY count DESC
             LIMIT 50
@@ -751,8 +816,7 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
       db.execute(sql`
             SELECT product as value, COUNT(DISTINCT COALESCE(reference_id, id))::int as count
             FROM sessions s
-            ${whereClause}
-            AND product IS NOT NULL
+            ${buildWhereWithCondition(sql`product IS NOT NULL`)}
             GROUP BY product
             ORDER BY count DESC
             LIMIT 50
@@ -761,8 +825,7 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
       db.execute(sql`
             SELECT device as value, COUNT(DISTINCT COALESCE(reference_id, id))::int as count
             FROM sessions s
-            ${whereClause}
-            AND device IS NOT NULL
+            ${buildWhereWithCondition(sql`device IS NOT NULL`)}
             GROUP BY device
             ORDER BY count DESC
             LIMIT 50
@@ -771,18 +834,16 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
       db.execute(sql`
             SELECT geo_country as value, COUNT(DISTINCT COALESCE(reference_id, id))::int as count
             FROM sessions s
-            ${whereClause}
-            AND geo_country IS NOT NULL
+            ${buildWhereWithCondition(sql`geo_country IS NOT NULL`)}
             GROUP BY geo_country
             ORDER BY count DESC
-            LIMIT 50
+            LIMIT 250
           `),
       // Cities
       db.execute(sql`
             SELECT geo_city as value, COUNT(DISTINCT COALESCE(reference_id, id))::int as count
             FROM sessions s
-            ${whereClause}
-            AND geo_city IS NOT NULL
+            ${buildWhereWithCondition(sql`geo_city IS NOT NULL`)}
             GROUP BY geo_city
             ORDER BY count DESC
             LIMIT 100

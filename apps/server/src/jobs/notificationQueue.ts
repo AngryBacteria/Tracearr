@@ -7,10 +7,12 @@
 
 import { Queue, Worker, type Job, type ConnectionOptions } from 'bullmq';
 import type { ViolationWithDetails, ActiveSession, NotificationEventType } from '@tracearr/shared';
+import { WS_EVENTS } from '@tracearr/shared';
 import { notificationService } from '../services/notify.js';
 import { pushNotificationService } from '../services/pushNotification.js';
 import { getNotificationSettings } from '../routes/settings.js';
 import { getChannelRouting } from '../routes/channelRouting.js';
+import { broadcastToAll } from '../websocket/index.js';
 
 /**
  * Map job types to notification event types for routing lookup
@@ -224,24 +226,32 @@ async function processNotificationJob(job: Job<NotificationJobData>): Promise<vo
       break;
 
     case 'server_down':
-      // Send to Discord/webhooks (if routing allows)
       if (routing.discordEnabled || routing.webhookEnabled) {
         await notificationService.notifyServerDown(payload.serverName, effectiveSettings);
       }
-      // Send push notification to mobile devices (if routing allows)
       if (routing.pushEnabled) {
         await pushNotificationService.notifyServerDown(payload.serverName, payload.serverId);
+      }
+      if (routing.webToastEnabled) {
+        broadcastToAll(WS_EVENTS.SERVER_DOWN as 'server:down', {
+          serverId: payload.serverId,
+          serverName: payload.serverName,
+        });
       }
       break;
 
     case 'server_up':
-      // Send to Discord/webhooks (if routing allows)
       if (routing.discordEnabled || routing.webhookEnabled) {
         await notificationService.notifyServerUp(payload.serverName, effectiveSettings);
       }
-      // Send push notification to mobile devices (if routing allows)
       if (routing.pushEnabled) {
         await pushNotificationService.notifyServerUp(payload.serverName, payload.serverId);
+      }
+      if (routing.webToastEnabled) {
+        broadcastToAll(WS_EVENTS.SERVER_UP as 'server:up', {
+          serverId: payload.serverId,
+          serverName: payload.serverName,
+        });
       }
       break;
 
@@ -253,8 +263,46 @@ async function processNotificationJob(job: Job<NotificationJobData>): Promise<vo
   }
 }
 
+/** Deduplication window in milliseconds (5 minutes) */
+const DEDUP_WINDOW_MS = 5 * 60 * 1000;
+
+function getTimeBucket(): number {
+  return Math.floor(Date.now() / DEDUP_WINDOW_MS);
+}
+
+/** Generate dedup key (5-min window). BullMQ rejects duplicate jobIds. */
+function getDedupeKey(data: NotificationJobData): string | undefined {
+  const timeBucket = getTimeBucket();
+
+  switch (data.type) {
+    case 'violation': {
+      return `violation-${data.payload.serverUserId}-${data.payload.rule.type}-${timeBucket}`;
+    }
+    case 'session_started':
+    case 'session_stopped': {
+      // Use internal id, not sessionKey (Emby reuses sessionKeys)
+      const sessionId = data.payload.id;
+      if (!sessionId) {
+        console.warn(`Session ${data.type} missing id, skipping deduplication`);
+        return undefined;
+      }
+      return `${data.type}-${sessionId}-${timeBucket}`;
+    }
+    case 'server_down':
+    case 'server_up': {
+      return `${data.type}-${data.payload.serverId}-${timeBucket}`;
+    }
+    default: {
+      const _exhaustive: never = data;
+      void _exhaustive;
+      return undefined;
+    }
+  }
+}
+
 /**
- * Enqueue a notification for async processing
+ * Enqueue a notification for async processing.
+ * Returns the job ID if enqueued, or undefined if deduplicated/dropped.
  */
 export async function enqueueNotification(
   data: NotificationJobData,
@@ -265,12 +313,30 @@ export async function enqueueNotification(
     return undefined;
   }
 
-  const job = await notificationQueue.add(data.type, data, {
-    priority: options?.priority,
-    delay: options?.delay,
-  });
+  const jobId = getDedupeKey(data);
 
-  return job.id;
+  try {
+    const job = await notificationQueue.add(data.type, data, {
+      jobId,
+      priority: options?.priority,
+      delay: options?.delay,
+    });
+
+    return job.id;
+  } catch (error) {
+    if (error instanceof Error) {
+      const msg = error.message.toLowerCase();
+      const isDuplicateError =
+        msg.includes('job with id') || msg.includes('already exists') || msg.includes('duplicate');
+
+      if (isDuplicateError) {
+        console.debug(`Deduplicated ${data.type} notification (jobId: ${jobId})`);
+        return undefined;
+      }
+    }
+    // Re-throw unexpected errors
+    throw error;
+  }
 }
 
 /**

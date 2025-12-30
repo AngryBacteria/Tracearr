@@ -29,6 +29,7 @@ import {
   calculatePauseAccumulation,
   checkWatchCompletion,
   shouldForceStopStaleSession,
+  detectMediaChange,
 } from './stateTracker.js';
 import { broadcastViolations } from './violations.js';
 import {
@@ -37,6 +38,7 @@ import {
   findActiveSession,
   buildActiveSession,
   processPollResults,
+  handleMediaChangeAtomic,
 } from './sessionLifecycle.js';
 import { enqueueNotification } from '../notificationQueue.js';
 
@@ -387,6 +389,58 @@ async function processServerSessions(
         // Get existing ACTIVE session to check for state changes
         const existingSession = await findActiveSession(server.id, processed.sessionKey);
         if (!existingSession) continue;
+
+        // Issue #57: Detect media change (e.g., Emby "Play Next Episode")
+        // When Emby plays next episode, it reuses sessionKey but changes ratingKey.
+        // Stop old session and create new one for proper play count tracking.
+        if (detectMediaChange(existingSession.ratingKey, processed.ratingKey)) {
+          const recentSessions = recentSessionsMap.get(serverUserId) ?? [];
+
+          const mediaChangeResult = await handleMediaChangeAtomic({
+            existingSession,
+            processed,
+            server: { id: server.id, name: server.name, type: server.type },
+            serverUser: userDetail,
+            geo,
+            activeRules,
+            recentSessions,
+          });
+
+          if (mediaChangeResult) {
+            const { stoppedSession, insertedSession, violationResults } = mediaChangeResult;
+
+            // Update cache for stopped session
+            if (cacheService) {
+              await cacheService.removeActiveSession(stoppedSession.id);
+              await cacheService.removeUserSession(stoppedSession.serverUserId, stoppedSession.id);
+            }
+            if (pubSubService) {
+              await pubSubService.publish('session:stopped', stoppedSession.id);
+            }
+
+            // Build and add new session
+            const activeSession = buildActiveSession({
+              session: insertedSession,
+              processed,
+              user: userDetail,
+              geo,
+              server,
+            });
+            newSessions.push(activeSession);
+
+            // Mark as cached within this poll cycle to prevent duplicate processing
+            cachedSessionKeys.add(sessionKey);
+
+            // Broadcast violations for new session
+            try {
+              await broadcastViolations(violationResults, insertedSession.id, pubSubService);
+            } catch (err) {
+              console.error('[Poller] Failed to broadcast violations:', err);
+            }
+          }
+
+          continue; // Skip normal update path
+        }
 
         const previousState = existingSession.state;
         const newState = processed.state;

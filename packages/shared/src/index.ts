@@ -63,6 +63,14 @@ export type {
   // Tautulli import
   TautulliImportProgress,
   TautulliImportResult,
+  // Jellystat import
+  JellystatImportProgress,
+  JellystatImportResult,
+  // Maintenance jobs
+  MaintenanceJobType,
+  MaintenanceJobStatus,
+  MaintenanceJobProgress,
+  MaintenanceJobResult,
   // WebSocket
   ServerToClientEvents,
   ClientToServerEvents,
@@ -106,6 +114,12 @@ export type {
   PlexDiscoveredConnection,
   PlexDiscoveredServer,
   PlexAvailableServersResponse,
+  // Plex account management
+  PlexAccount,
+  PlexAccountsResponse,
+  LinkPlexAccountRequest,
+  LinkPlexAccountResponse,
+  UnlinkPlexAccountResponse,
   // Version
   VersionInfo,
 } from './types.js';
@@ -153,6 +167,13 @@ export {
   updateSettingsSchema,
   // Tautulli import
   tautulliImportSchema,
+  // Jellystat import
+  jellystatPlayStateSchema,
+  jellystatTranscodingInfoSchema,
+  jellystatPlaybackActivitySchema,
+  jellystatBackupSchema,
+  jellystatImportBodySchema,
+  importJobStatusSchema,
 } from './schemas.js';
 
 // Schema input type exports
@@ -173,6 +194,13 @@ export type {
   LocationStatsQueryInput,
   UpdateSettingsInput,
   TautulliImportInput,
+  // Jellystat types
+  JellystatPlayState,
+  JellystatTranscodingInfo,
+  JellystatPlaybackActivity,
+  JellystatBackup,
+  JellystatImportBody,
+  ImportJobStatus,
 } from './schemas.js';
 
 // Constant exports

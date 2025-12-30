@@ -14,49 +14,48 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { useChannelRouting, useUpdateChannelRouting } from '@/hooks/queries';
 
 // Display names and descriptions for event types
-const EVENT_CONFIG: Record<NotificationEventType, { name: string; description: string }> = {
-  violation_detected: {
-    name: 'Rule Violation',
-    description: 'A user triggered a rule violation (e.g., concurrent streams, impossible travel)',
-  },
-  new_device: {
-    name: 'New Device',
-    description: 'A user logged in from a new device for the first time',
-  },
-  trust_score_changed: {
-    name: 'Trust Score Changed',
-    description: "A user's trust score changed significantly",
-  },
-  stream_started: {
-    name: 'Stream Started',
-    description: 'A user started watching content',
-  },
-  stream_stopped: {
-    name: 'Stream Stopped',
-    description: 'A user stopped watching content',
-  },
-  concurrent_streams: {
-    name: 'Concurrent Streams',
-    description: 'Multiple streams detected from the same user',
-  },
-  server_down: {
-    name: 'Server Offline',
-    description: 'A media server became unreachable',
-  },
-  server_up: {
-    name: 'Server Online',
-    description: 'A media server came back online',
-  },
-};
+// Note: concurrent_streams excluded - it's a rule type, covered by violation_detected
+const EVENT_CONFIG: Partial<Record<NotificationEventType, { name: string; description: string }>> =
+  {
+    violation_detected: {
+      name: 'Rule Violation',
+      description:
+        'A user triggered a rule violation (e.g., concurrent streams, impossible travel)',
+    },
+    new_device: {
+      name: 'New Device',
+      description: 'A user logged in from a new device for the first time',
+    },
+    trust_score_changed: {
+      name: 'Trust Score Changed',
+      description: "A user's trust score changed significantly",
+    },
+    stream_started: {
+      name: 'Stream Started',
+      description: 'A user started watching content',
+    },
+    stream_stopped: {
+      name: 'Stream Stopped',
+      description: 'A user stopped watching content',
+    },
+    server_down: {
+      name: 'Server Offline',
+      description: 'A media server became unreachable',
+    },
+    server_up: {
+      name: 'Server Online',
+      description: 'A media server came back online',
+    },
+  };
 
 // Order of events in the table (security first, then streams, then server)
+// concurrent_streams excluded - it's a rule type, violations cover it
 const EVENT_ORDER: NotificationEventType[] = [
   'violation_detected',
   'new_device',
   'trust_score_changed',
   'stream_started',
   'stream_stopped',
-  'concurrent_streams',
   'server_down',
   'server_up',
 ];
@@ -122,6 +121,7 @@ export function NotificationRoutingMatrix({
               {EVENT_ORDER.map((eventType) => {
                 const routing = routingMap.get(eventType);
                 const config = EVENT_CONFIG[eventType];
+                if (!config) return null;
 
                 return (
                   <TableRow key={eventType}>

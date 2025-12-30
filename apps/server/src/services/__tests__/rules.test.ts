@@ -981,8 +981,8 @@ describe('RuleEngine', () => {
       expect(results).toHaveLength(0);
     });
 
-    it('should be case-sensitive for country codes', async () => {
-      // Country codes should be uppercase
+    it('should be case-insensitive for country codes (normalizes to uppercase)', async () => {
+      // Country codes should be normalized to uppercase for comparison
       const session = createMockSession({
         geoCountry: 'cn', // lowercase
       });
@@ -993,8 +993,50 @@ describe('RuleEngine', () => {
 
       const results = await ruleEngine.evaluateSession(session, [rule], []);
 
-      // Case-sensitive, so 'cn' !== 'CN'
+      // Should violate because 'cn' normalizes to 'CN'
+      expect(results).toHaveLength(1);
+      expect(results[0]?.data).toEqual(
+        expect.objectContaining({
+          countryCode: 'CN',
+        })
+      );
+    });
+
+    it('should match country name against country code in rule', async () => {
+      // Issue #106: Session might have country name, rule has codes
+      const session = createMockSession({
+        geoCountry: 'Italy', // full name instead of 'IT'
+      });
+
+      const rule = createMockRule('geo_restriction', {
+        params: { mode: 'allowlist', countries: ['IT'] },
+      });
+
+      const results = await ruleEngine.evaluateSession(session, [rule], []);
+
+      // Should NOT violate because 'Italy' normalizes to 'IT' which is in allowlist
       expect(results).toHaveLength(0);
+    });
+
+    it('should violate when country name is not in allowlist', async () => {
+      const session = createMockSession({
+        geoCountry: 'Germany', // full name
+      });
+
+      const rule = createMockRule('geo_restriction', {
+        params: { mode: 'allowlist', countries: ['IT', 'FR'] },
+      });
+
+      const results = await ruleEngine.evaluateSession(session, [rule], []);
+
+      // Should violate because 'Germany' (DE) is not in [IT, FR]
+      expect(results).toHaveLength(1);
+      expect(results[0]?.data).toEqual(
+        expect.objectContaining({
+          country: 'Germany',
+          countryCode: 'DE',
+        })
+      );
     });
 
     it('should violate for any blocked country in list', async () => {
@@ -1037,6 +1079,34 @@ describe('RuleEngine', () => {
 
       const rule = createMockRule('geo_restriction', {
         params: { mode: 'allowlist', countries: ['US', 'CA', 'GB'] },
+      });
+
+      const results = await ruleEngine.evaluateSession(session, [rule], []);
+      expect(results).toHaveLength(0);
+    });
+
+    it('should NOT violate for Local Network IPs (allowlist mode)', async () => {
+      // Local/private IPs return 'Local Network' as country - should be skipped
+      const session = createMockSession({
+        geoCountry: 'Local Network',
+      });
+
+      const rule = createMockRule('geo_restriction', {
+        params: { mode: 'allowlist', countries: ['US', 'CA', 'GB'] },
+      });
+
+      const results = await ruleEngine.evaluateSession(session, [rule], []);
+      expect(results).toHaveLength(0);
+    });
+
+    it('should NOT violate for Local Network IPs (blocklist mode)', async () => {
+      // Local/private IPs should be skipped regardless of mode
+      const session = createMockSession({
+        geoCountry: 'Local Network',
+      });
+
+      const rule = createMockRule('geo_restriction', {
+        params: { mode: 'blocklist', countries: ['Local Network'] }, // Even if explicitly listed
       });
 
       const results = await ruleEngine.evaluateSession(session, [rule], []);

@@ -20,7 +20,8 @@
         "autoIncrement": true
       },
       "android": {
-        "buildType": "app-bundle"
+        "buildType": "app-bundle",
+        "autoIncrement": true
       },
       "env": {
         "EXPO_PUBLIC_API_URL": "https://tracearr.example.com"
@@ -58,7 +59,7 @@
       "android": {
         "serviceAccountKeyPath": "./credentials/google-service-account.json",
         "track": "internal",
-        "releaseStatus": "draft"
+        "releaseStatus": "completed"
       }
     },
     "production": {

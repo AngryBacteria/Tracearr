@@ -46,49 +46,80 @@ function saveColumnVisibility(visibility: ColumnVisibility): void {
   }
 }
 
+function parseCommaSeparated<T extends string>(
+  value: string | null,
+  validValues?: readonly T[]
+): T[] | undefined {
+  if (!value) return undefined;
+  const values = value.split(',').filter(Boolean) as T[];
+  if (validValues) {
+    const filtered = values.filter((v) => validValues.includes(v));
+    return filtered.length > 0 ? filtered : undefined;
+  }
+  return values.length > 0 ? values : undefined;
+}
+
 // Parse URL search params into filter object
 function parseFiltersFromUrl(searchParams: URLSearchParams): HistoryFilters {
   const filters: HistoryFilters = {};
 
-  const serverUserId = searchParams.get('userId');
-  if (serverUserId) filters.serverUserId = serverUserId;
+  const userIds = searchParams.get('userIds');
+  if (userIds) {
+    const parsed = userIds.split(',').filter(Boolean);
+    if (parsed.length > 0) filters.serverUserIds = parsed;
+  }
 
   const serverId = searchParams.get('serverId');
   if (serverId) filters.serverId = serverId;
 
-  const mediaType = searchParams.get('mediaType');
-  if (mediaType === 'movie' || mediaType === 'episode' || mediaType === 'track') {
-    filters.mediaType = mediaType;
-  }
+  const mediaTypes = parseCommaSeparated(searchParams.get('mediaTypes'), [
+    'movie',
+    'episode',
+    'track',
+  ] as const);
+  if (mediaTypes) filters.mediaTypes = mediaTypes;
 
   const state = searchParams.get('state');
   if (state === 'playing' || state === 'paused' || state === 'stopped') {
     filters.state = state;
   }
 
-  const isTranscode = searchParams.get('isTranscode');
-  if (isTranscode === 'true') filters.isTranscode = true;
-  if (isTranscode === 'false') filters.isTranscode = false;
+  const transcodeDecisions = parseCommaSeparated(searchParams.get('transcodeDecisions'), [
+    'directplay',
+    'copy',
+    'transcode',
+  ] as const);
+  if (transcodeDecisions) filters.transcodeDecisions = transcodeDecisions;
 
-  const platform = searchParams.get('platform');
-  if (platform) filters.platform = platform;
+  const platforms = parseCommaSeparated<string>(searchParams.get('platforms'));
+  if (platforms) filters.platforms = platforms;
 
-  const geoCountry = searchParams.get('country');
-  if (geoCountry) filters.geoCountry = geoCountry;
+  const countries = parseCommaSeparated<string>(searchParams.get('countries'));
+  if (countries) filters.geoCountries = countries;
 
   const search = searchParams.get('search');
   if (search) filters.search = search;
 
   const startDate = searchParams.get('startDate');
+  const endDate = searchParams.get('endDate');
+  const period = searchParams.get('period');
+
   if (startDate) {
     const parsed = new Date(startDate);
     if (!isNaN(parsed.getTime())) filters.startDate = parsed;
   }
 
-  const endDate = searchParams.get('endDate');
   if (endDate) {
     const parsed = new Date(endDate);
     if (!isNaN(parsed.getTime())) filters.endDate = parsed;
+  }
+
+  // Default to 30d only on fresh page load (no period param)
+  // If period=all, user explicitly wants all data
+  if (!filters.startDate && !filters.endDate && period !== 'all') {
+    const now = new Date();
+    filters.startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    filters.endDate = now;
   }
 
   const watched = searchParams.get('watched');
@@ -112,16 +143,18 @@ function parseFiltersFromUrl(searchParams: URLSearchParams): HistoryFilters {
 function filtersToUrlParams(filters: HistoryFilters): URLSearchParams {
   const params = new URLSearchParams();
 
-  if (filters.serverUserId) params.set('userId', filters.serverUserId);
+  if (filters.serverUserIds?.length) params.set('userIds', filters.serverUserIds.join(','));
   if (filters.serverId) params.set('serverId', filters.serverId);
-  if (filters.mediaType) params.set('mediaType', filters.mediaType);
+  if (filters.mediaTypes?.length) params.set('mediaTypes', filters.mediaTypes.join(','));
   if (filters.state) params.set('state', filters.state);
-  if (filters.isTranscode !== undefined) params.set('isTranscode', String(filters.isTranscode));
-  if (filters.platform) params.set('platform', filters.platform);
-  if (filters.geoCountry) params.set('country', filters.geoCountry);
+  if (filters.transcodeDecisions?.length)
+    params.set('transcodeDecisions', filters.transcodeDecisions.join(','));
+  if (filters.platforms?.length) params.set('platforms', filters.platforms.join(','));
+  if (filters.geoCountries?.length) params.set('countries', filters.geoCountries.join(','));
   if (filters.search) params.set('search', filters.search);
   if (filters.startDate) params.set('startDate', filters.startDate.toISOString());
   if (filters.endDate) params.set('endDate', filters.endDate.toISOString());
+  if (!filters.startDate && !filters.endDate) params.set('period', 'all');
   if (filters.watched !== undefined) params.set('watched', String(filters.watched));
   if (filters.orderBy && filters.orderBy !== 'startedAt') params.set('orderBy', filters.orderBy);
   if (filters.orderDir && filters.orderDir !== 'desc') params.set('orderDir', filters.orderDir);
@@ -149,9 +182,11 @@ export function History() {
   const { data, isLoading, isFetchingNextPage, hasNextPage, fetchNextPage } =
     useHistorySessions(filters);
 
-  const { data: filterOptions, isLoading: filterOptionsLoading } = useFilterOptions(
-    filters.serverId
-  );
+  const { data: filterOptions, isLoading: filterOptionsLoading } = useFilterOptions({
+    serverId: filters.serverId,
+    startDate: filters.startDate,
+    endDate: filters.endDate,
+  });
 
   // Intersection observer for infinite scroll
   const { ref: loadMoreRef, inView } = useInView({
@@ -162,7 +197,7 @@ export function History() {
   // Fetch next page when load more element is in view
   useEffect(() => {
     if (inView && hasNextPage && !isFetchingNextPage) {
-      fetchNextPage();
+      void fetchNextPage();
     }
   }, [inView, hasNextPage, isFetchingNextPage, fetchNextPage]);
 

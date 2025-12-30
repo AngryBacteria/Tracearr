@@ -136,3 +136,12 @@ export function broadcastToServer<K extends keyof ServerToClientEvents>(
     )(event, ...args);
   }
 }
+
+export function broadcastToAll<K extends keyof ServerToClientEvents>(
+  event: K,
+  ...args: Parameters<ServerToClientEvents[K]>
+): void {
+  if (io) {
+    (io.emit as (event: K, ...args: Parameters<ServerToClientEvents[K]>) => void)(event, ...args);
+  }
+}

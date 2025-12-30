@@ -21,6 +21,7 @@ import {
   jsonb,
   index,
   uniqueIndex,
+  unique,
   check,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
@@ -47,16 +48,22 @@ export const ruleTypeEnum = [
 export const violationSeverityEnum = ['low', 'warning', 'high'] as const;
 
 // Media servers (Plex/Jellyfin/Emby instances)
-export const servers = pgTable('servers', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  name: varchar('name', { length: 100 }).notNull(),
-  type: varchar('type', { length: 20 }).notNull().$type<(typeof serverTypeEnum)[number]>(),
-  url: text('url').notNull(),
-  token: text('token').notNull(), // Encrypted
-  machineIdentifier: varchar('machine_identifier', { length: 100 }), // Plex clientIdentifier for dedup
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const servers = pgTable(
+  'servers',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: varchar('name', { length: 100 }).notNull(),
+    type: varchar('type', { length: 20 }).notNull().$type<(typeof serverTypeEnum)[number]>(),
+    url: text('url').notNull(),
+    token: text('token').notNull(), // Encrypted
+    machineIdentifier: varchar('machine_identifier', { length: 100 }), // Plex clientIdentifier for dedup
+    // For Plex servers: which linked Plex account this server was added from (nullable for Jellyfin/Emby and legacy)
+    plexAccountId: uuid('plex_account_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('servers_plex_account_idx').on(table.plexAccountId)]
+);
 
 /**
  * Users - Identity table representing real humans
@@ -105,6 +112,38 @@ export const users = pgTable(
 );
 
 /**
+ * Plex Accounts - Linked Plex.tv accounts for server discovery
+ *
+ * Allows owners to link multiple Plex.tv accounts to add servers from different accounts.
+ * Each account stores a token for Plex API calls (server discovery, etc.).
+ * The allowLogin flag controls which accounts can be used for authentication.
+ */
+export const plexAccounts = pgTable(
+  'plex_accounts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    plexAccountId: varchar('plex_account_id', { length: 255 }).notNull(),
+    plexUsername: varchar('plex_username', { length: 255 }),
+    plexEmail: varchar('plex_email', { length: 255 }),
+    plexThumbnail: varchar('plex_thumbnail', { length: 500 }),
+    plexToken: varchar('plex_token', { length: 500 }).notNull(),
+    allowLogin: boolean('allow_login').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // One Plex.tv account can only be linked to one Tracearr user
+    unique('plex_accounts_plex_account_id_unique').on(table.plexAccountId),
+    // No duplicate links for same user (defense in depth)
+    unique('plex_accounts_user_plex_unique').on(table.userId, table.plexAccountId),
+    index('plex_accounts_user_idx').on(table.userId),
+    index('plex_accounts_allow_login_idx').on(table.plexAccountId, table.allowLogin),
+  ]
+);
+
+/**
  * Server Users - Account on a specific media server
  *
  * Represents a user's account on a Plex/Jellyfin/Emby server.
@@ -129,6 +168,9 @@ export const serverUsers = pgTable(
     username: varchar('username', { length: 255 }).notNull(), // Username on this server
     email: varchar('email', { length: 255 }), // Email from server sync (may differ from users.email)
     thumbUrl: text('thumb_url'), // Avatar from server
+
+    // When user joined/was added to media server (Plex provides this, Jellyfin/Emby don't)
+    joinedAt: timestamp('joined_at', { withTimezone: true }),
 
     // Server-specific permissions
     isServerAdmin: boolean('is_server_admin').notNull().default(false),
@@ -220,6 +262,7 @@ export const sessions = pgTable(
     index('sessions_server_time_idx').on(table.serverId, table.startedAt),
     index('sessions_state_idx').on(table.state),
     index('sessions_external_session_idx').on(table.serverId, table.externalSessionId),
+    index('sessions_active_lookup_idx').on(table.serverId, table.sessionKey, table.stoppedAt),
     index('sessions_device_idx').on(table.serverUserId, table.deviceId),
     index('sessions_reference_idx').on(table.referenceId), // For session grouping queries
     index('sessions_server_user_rating_idx').on(table.serverUserId, table.ratingKey), // For resume detection
@@ -282,6 +325,9 @@ export const violations = pgTable(
     severity: varchar('severity', { length: 20 })
       .notNull()
       .$type<(typeof violationSeverityEnum)[number]>(),
+    // Denormalized rule type for unique constraint (rules.type copied here)
+    // This enables the partial unique index without requiring a join
+    ruleType: varchar('rule_type', { length: 50 }).notNull().$type<(typeof ruleTypeEnum)[number]>(),
     data: jsonb('data').notNull().$type<Record<string, unknown>>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     acknowledgedAt: timestamp('acknowledged_at', { withTimezone: true }),
@@ -290,6 +336,14 @@ export const violations = pgTable(
     index('violations_server_user_id_idx').on(table.serverUserId),
     index('violations_rule_id_idx').on(table.ruleId),
     index('violations_created_at_idx').on(table.createdAt),
+    // Composite index for deduplication queries:
+    // SELECT ... WHERE serverUserId = ? AND acknowledgedAt IS NULL AND createdAt >= ?
+    index('violations_dedup_idx').on(table.serverUserId, table.acknowledgedAt, table.createdAt),
+    // Partial unique index to prevent duplicate unacknowledged violations
+    // Defense-in-depth: catches race conditions that bypass application-level dedup
+    uniqueIndex('violations_unique_active_user_session_type')
+      .on(table.serverUserId, table.sessionId, table.ruleType)
+      .where(sql`${table.acknowledgedAt} IS NULL`),
   ]
 );
 
@@ -517,15 +571,28 @@ export const settings = pgTable('settings', {
 // Relations
 // ============================================================================
 
-export const serversRelations = relations(servers, ({ many }) => ({
+export const serversRelations = relations(servers, ({ one, many }) => ({
   serverUsers: many(serverUsers),
   sessions: many(sessions),
+  plexAccount: one(plexAccounts, {
+    fields: [servers.plexAccountId],
+    references: [plexAccounts.id],
+  }),
 }));
 
 export const usersRelations = relations(users, ({ many }) => ({
   serverUsers: many(serverUsers),
   mobileSessions: many(mobileSessions),
   mobileTokens: many(mobileTokens),
+  plexAccounts: many(plexAccounts),
+}));
+
+export const plexAccountsRelations = relations(plexAccounts, ({ one, many }) => ({
+  user: one(users, {
+    fields: [plexAccounts.userId],
+    references: [users.id],
+  }),
+  servers: many(servers),
 }));
 
 export const serverUsersRelations = relations(serverUsers, ({ one, many }) => ({
